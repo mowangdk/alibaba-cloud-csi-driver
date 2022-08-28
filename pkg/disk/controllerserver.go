@@ -314,7 +314,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		client := GlobalConfigVar.ClientSet
 		nodeInfo, err := client.CoreV1().Nodes().Get(ctx, diskVol.NodeSelected, metav1.GetOptions{})
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "CreateVolume:: get node info error: %v", req.Name)
+			return nil, status.Errorf(codes.Aborted, "CreateVolume:: get node info error: %v", req.Name)
 		}
 		re := regexp.MustCompile(`node.csi.alibabacloud.com/disktype.(.*)`)
 		for key := range nodeInfo.Labels {
@@ -444,13 +444,15 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	if err != nil {
 		newErrMsg := utils.FindSuggestionByErrorMessage(err.Error(), utils.DiskProvision)
-		if strings.Contains(err.Error(), DiskSizeNotAvailable) || strings.Contains(err.Error(), "The specified parameter \"Size\" is not valid") {
-			return nil, status.Error(codes.Internal, newErrMsg)
+		if strings.Contains(err.Error(), DiskSizeNotAvailable) {
+			return nil, status.Error(codes.ResourceExhausted, newErrMsg)
+		} else if strings.Contains(err.Error(), "The specified parameter \"Size\" is not valid") {
+			return nil, status.Error(codes.Aborted, newErrMsg)
 		} else if strings.Contains(err.Error(), DiskNotAvailable) {
-			return nil, status.Error(codes.Internal, newErrMsg)
+			return nil, status.Error(codes.Aborted, newErrMsg)
 		} else {
 			log.Errorf("CreateVolume: requestId[%s], fail to create disk %s error: %v", volumeResponse.RequestId, req.GetName(), newErrMsg)
-			return nil, status.Error(codes.Internal, newErrMsg)
+			return nil, status.Error(codes.Aborted, newErrMsg)
 		}
 	}
 
