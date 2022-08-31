@@ -798,19 +798,27 @@ func (ns *nodeServer) unmountDuplicateMountPoint(targetPath string) error {
 			// check globalPath2 is mountpoint
 			notmounted, err := ns.k8smounter.IsLikelyNotMountPoint(globalPath2)
 			if err == nil && !notmounted {
-				// check device is used by others
-				refs, err := ns.k8smounter.GetMountRefs(globalPath2)
-				if err == nil && !ns.mounter.HasMountRefs(globalPath2, refs) {
-					log.Infof("NodeUnpublishVolume: VolumeId Unmount global path %s for ack with kubelet data disk", globalPath2)
-					if err := utils.Umount(globalPath2); err != nil {
-						log.Errorf("NodeUnpublishVolume: volumeId: unmount global path %s failed with err: %v", globalPath2, err)
-						return status.Error(codes.Internal, err.Error())
+				for i := 0; i < 3; i++ {
+					// check device is used by others
+					refs, err := ns.k8smounter.GetMountRefs(globalPath2)
+					if err != nil {
+						log.Infof("NodeUnpublishVolume: failed to get refs in %v try with err: %+v", i, err)
+						continue
 					}
-				} else {
-					log.Infof("Global Path %s is mounted by others: %v", globalPath2, refs)
+					hasRefs := ns.mounter.HasMountRefs(globalPath2, refs)
+					if !hasRefs {
+						log.Infof("NodeUnpublishVolume: VolumeId Unmount global path %s for ack with kubelet data disk", globalPath2)
+						if err := utils.Umount(globalPath2); err != nil {
+							log.Errorf("NodeUnpublishVolume: volumeId: unmount global path %s failed with err: %v", globalPath2, err)
+							return status.Error(codes.Internal, err.Error())
+						}
+					} else {
+						log.Infof("Global Path %s is mounted by others: %v, hasRefs: %+v", globalPath2, refs, hasRefs)
+					}
+					return nil
 				}
 			} else {
-				log.Warnf("Global Path is not mounted: %s", globalPath2)
+				log.Warnf("Global Path is not mounted: %s, err: %+v", globalPath2, err)
 			}
 		}
 	} else {
