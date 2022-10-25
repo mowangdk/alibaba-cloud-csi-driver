@@ -174,7 +174,7 @@ func NewNodeServer(d *csicommon.CSIDriver, c *ecs.Client) csi.NodeServer {
 		log.Infof("Currently node is NOT VF model")
 	}
 	go UpdateNode(nodeID, c)
-	if GlobalConfigVar.CheckBDFHotPlugin {
+	if GlobalConfigVar.DiskBdfEnable {
 		go checkVfhpOnlineReconcile()
 	}
 
@@ -781,7 +781,11 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		}
 	}
 	if IsVFInstance() && !IsVFNode() {
-		if err := clearBdfInfo(req.VolumeId, ""); err != nil {
+		bdf, err := findBdf(req.VolumeId)
+		if err != nil {
+			return nil, err
+		}
+		if err := clearBdfInfo(req.VolumeId, bdf); err != nil {
 			log.Errorf("NodeUnstagedVolume: clear disk bdf info %s with err: %s", req.VolumeId, err)
 			return nil, err
 		}

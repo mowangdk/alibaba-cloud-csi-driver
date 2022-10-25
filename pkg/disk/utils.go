@@ -964,10 +964,11 @@ func getDiskVolumeOptions(req *csi.CreateVolumeRequest) (*diskVolumeArgs, error)
 			return nil, fmt.Errorf("illegal optional parameter volumeExpandAutoSnapshot, only support forced, besteffort and closed, the input is: %s", value)
 		}
 	}
-	if value, ok = volOptions["volumeDeleteAutoSnapshot"]; ok {
-		value = strings.ToLower(value)
-		if value == "true" {
-			diskVolArgs.DelAutoSnap = true
+	if value, ok = volOptions["volumeDeleteAutoSnapshotRetentDays"]; ok && value != "" {
+		if days, err :=  strconv.Atoi(value); err == nil {
+			if MIN_SNAPSHOT_RETENTION_DAYS <= days && days <= MAX_SNAPSHOT_RETENTION_DAYS {
+				diskVolArgs.DelAutoSnapRetentDays = value
+			}
 		}
 	}
 

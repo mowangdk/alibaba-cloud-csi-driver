@@ -45,7 +45,7 @@ const (
 	// DiskBdfCheckTagKey disk bdf check tag
 	DiskBdfCheckTagKey = "check.bdf.csi.aliyun.com"
 	// Vfhp Reconcile period
-	VfhpReconcilePeriod = 60
+	VfhpReconcilePeriod = 600
 )
 
 // PatchStringValue type
@@ -304,6 +304,7 @@ func storeBdfInfo(diskID, bdf string) (err error) {
 
 func clearBdfInfo(diskID, bdf string) (err error) {
 
+	log.Infof("clearBdfInfo: bdf: %s", bdf)
 	ecsClient, err := getEcsClientByID(diskID, "")
 	if err != nil {
 		return err
@@ -468,7 +469,9 @@ func checkVfhpOnline() {
 	_, err := utils.Run(cmd)
 	if err == nil {
 		isVF = false
+		return
 	}
+	log.Infof("checkVfhpOnline: check node vfhp helper cmd exec err: %+v", err)
 }
 
 // IsVFInstance check node is vf or not

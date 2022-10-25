@@ -80,7 +80,6 @@ type GlobalConfig struct {
 	ControllerService     bool
 	BdfHealthCheck        bool
 	DiskMultiTenantEnable bool
-	CheckBDFHotPlugin     bool
 	SnapClient            *snapClientset.Clientset
 	NodeMultiZoneEnable   bool
 	WaitBeforeAttach      bool

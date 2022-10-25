@@ -36,6 +36,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"strconv"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -951,13 +952,14 @@ func FormatAndMount(diskMounter *k8smount.SafeFormatAndMount, source string, tar
 	return mountErr
 }
 
-func HasSpecificTagKey(tagKey string, disk *ecs.Disk) bool {
-	exists := false
+func HasSpecificTagKey(tagKey string, disk *ecs.Disk) int {
 	for _, tag := range disk.Tags.Tag {
 		if tag.TagKey == tagKey {
-			exists = true
-			return exists
+			days, err := strconv.Atoi(tag.TagValue)
+			if err == nil {
+				return days
+			} 
 		}
 	}
-	return exists
+	return 0
 }
