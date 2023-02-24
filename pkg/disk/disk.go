@@ -332,7 +332,7 @@ func GlobalConfigSet(client *ecs.Client, nodeID string) *restclient.Config {
 	runtimeValue := "runc"
 	nodeInfo, err := kubeClient.CoreV1().Nodes().Get(context.Background(), nodeName, metav1.GetOptions{})
 	if err != nil {
-		log.Log.Fatalf("GlobalConfigSet: get node %s with error: %s", nodeName, err.Error())
+		log.Log.Errorf("GlobalConfigSet: get node %s with error: %s", nodeName, err.Error())
 	} else {
 		if value, ok := nodeInfo.Labels["alibabacloud.com/container-runtime"]; ok && strings.TrimSpace(value) == "Sandboxed-Container.runv" {
 			if value, ok := nodeInfo.Labels["alibabacloud.com/container-runtime-version"]; ok && strings.HasPrefix(strings.TrimSpace(value), "1.") {
@@ -342,6 +342,9 @@ func GlobalConfigSet(client *ecs.Client, nodeID string) *restclient.Config {
 		log.Log.Infof("Describe node %s and Set RunTimeClass to %s", nodeName, runtimeValue)
 	}
 	regionID, zoneID, _ := getMeta(nodeInfo)
+	if regionID == "" {
+		regionID = GetRegionID()
+	}
 	runtimeEnv := os.Getenv("RUNTIME")
 	if runtimeEnv == MixRunTimeMode {
 		runtimeValue = MixRunTimeMode

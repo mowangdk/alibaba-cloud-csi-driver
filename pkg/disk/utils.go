@@ -1265,6 +1265,9 @@ func UpdateNode(nodeID string, c *ecs.Client) {
 func getMeta(node *v1.Node) (string, string, string) {
 	zoneID := ""
 	regionID := ""
+	if node == nil {
+		return "", "", ""
+	}
 	if value := node.Labels[zoneIDLabelNew]; value != "" {
 		zoneID = value
 	}
