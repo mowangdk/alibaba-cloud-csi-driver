@@ -1106,7 +1106,7 @@ func checkDeviceAvailable(devicePath, volumeID, targetPath string) error {
 
 	checkCmd := fmt.Sprintf("mount | grep \"%s on %s type\" | wc -l", devicePath, utils.KubeletRootDir)
 	if out, err := utils.Run(checkCmd); err != nil {
-		msg := fmt.Sprintf("devicePath(%s) is used to kubelet", devicePath)
+		msg := fmt.Sprintf("devicePath(%s) is used to kubelet, err: %v", devicePath, err)
 		return status.Error(codes.Internal, msg)
 	} else if strings.TrimSpace(out) != "0" {
 		msg := fmt.Sprintf("devicePath(%s) is used as DataDisk for kubelet, cannot used fo Volume", devicePath)
