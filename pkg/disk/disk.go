@@ -330,17 +330,21 @@ func GlobalConfigSet(nodeID string) *restclient.Config {
 	}
 
 	nodeName := os.Getenv(kubeNodeName)
-	runtimeValue := "runc"
+	runtimeValue := RuncValue
 	var regionID, zoneID, vmID string
 	nodeInfo, err := kubeClient.CoreV1().Nodes().Get(context.Background(), nodeName, metav1.GetOptions{})
 	if err != nil {
 		log.Log.Errorf("GlobalConfigSet: get node %s with error: %s", nodeName, err.Error())
 		regionID = GetRegionID()
 	} else {
-		if value, ok := nodeInfo.Labels["alibabacloud.com/container-runtime"]; ok && strings.TrimSpace(value) == "Sandboxed-Container.runv" {
-			if value, ok := nodeInfo.Labels["alibabacloud.com/container-runtime-version"]; ok && strings.HasPrefix(strings.TrimSpace(value), "1.") {
+		if value, ok := nodeInfo.Labels[NodeContainerRuntimeLabel]; ok && strings.TrimSpace(value) == RunvValue {
+			if value, ok := nodeInfo.Labels[NodeContainerRuntimeVersionLabel]; ok && strings.HasPrefix(strings.TrimSpace(value), "1.") {
 				runtimeValue = MixRunTimeMode
 			}
+		}
+		if value, ok := nodeInfo.Labels[NodeContainerRuntimeRund2Label]; ok && strings.TrimSpace(value) == Rund2Value {
+			runtimeValue = RuncValue
+			log.Log.Infof("GlobalConfigSet: start rund2.0 mode")
 		}
 		log.Log.Infof("Describe node %s and Set RunTimeClass to %s", nodeName, runtimeValue)
 

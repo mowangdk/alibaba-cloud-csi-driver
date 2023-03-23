@@ -263,8 +263,8 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		if runtime, err := utils.GetPodRunTime(req, ns.clientSet); err != nil {
 			return nil, status.Errorf(codes.Internal, "NodePublishVolume: cannot get pod runtime: %v", err)
 		} else if runtime == RunvRunTimeMode {
-			log.Log.Infof("NodePublishVolume:: Kata Disk Volume %s Mount with: %v", req.VolumeId, req)
-			// umount the stage path, which is mounted in Stage (tmpfs)
+			log.Log.Infof("NodePublishVolume:: Kata Disk Volume %s Mount with: %v start to unmount stage target: %s", req.VolumeId, req, sourcePath)
+			// umount the stage path, which is mounted in Stage
 			if err := ns.unmountStageTarget(sourcePath); err != nil {
 				log.Log.Errorf("NodePublishVolume(runv): unmountStageTarget %s with error: %s", sourcePath, err.Error())
 				return nil, status.Error(codes.InvalidArgument, "NodePublishVolume: unmountStageTarget "+sourcePath+" with error: "+err.Error())
@@ -565,6 +565,8 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 			log.Log.Infof("NodeStageVolume:  volumeId: %s, Path: %s is already mounted in kata mode", req.VolumeId, targetPath)
 			return &csi.NodeStageVolumeResponse{}, nil
 		}
+	} else {
+		log.Log.Errorf("NodeStageVolume: loadJsonData err: %v", err)
 	}
 
 	// Step 1: check oldVersion volumeMount
@@ -701,16 +703,9 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	// do format-mount or mount
 	diskMounter := &k8smount.SafeFormatAndMount{Interface: ns.k8smounter, Exec: utilexec.New()}
-	if len(mkfsOptions) > 0 && (fsType == "ext4" || fsType == "ext3") {
-		if err := utils.FormatAndMount(diskMounter, device, targetPath, fsType, mkfsOptions, mountOptions, GlobalConfigVar.OmitFilesystemCheck); err != nil {
-			log.Log.Errorf("Mountdevice: FormatAndMount fail with mkfsOptions %s, %s, %s, %s, %s with error: %s", device, targetPath, fsType, mkfsOptions, mountOptions, err.Error())
-			return nil, status.Error(codes.Internal, err.Error())
-		}
-	} else {
-		if err := diskMounter.FormatAndMount(device, targetPath, fsType, mountOptions); err != nil {
-			log.Log.Errorf("NodeStageVolume: Volume: %s, Device: %s, FormatAndMount error: %s", req.VolumeId, device, err.Error())
-			return nil, status.Error(codes.Internal, err.Error())
-		}
+	if err := utils.FormatAndMount(diskMounter, device, targetPath, fsType, mkfsOptions, mountOptions, GlobalConfigVar.OmitFilesystemCheck); err != nil {
+		log.Log.Errorf("Mountdevice: FormatAndMount fail with mkfsOptions %s, %s, %s, %s, %s with error: %s", device, targetPath, fsType, mkfsOptions, mountOptions, err.Error())
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 	log.Log.Infof("NodeStageVolume: Mount Successful: volumeId: %s target %v, device: %s, mkfsOptions: %v, options: %v", req.VolumeId, targetPath, device, mkfsOptions, mountOptions)
 	_, pvc, err := getPvPvcFromDiskId(req.VolumeId)

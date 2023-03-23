@@ -186,6 +186,14 @@ const (
 	labelVolumeType   = "csi.alibabacloud.com/disktype"
 	annAppendPrefix   = "csi.alibabacloud.com/annotation-prefix/"
 
+	// nods labels
+	NodeContainerRuntimeLabel        = "alibabacloud.com/container-runtime"
+	NodeContainerRuntimeVersionLabel = "alibabacloud.com/container-runtime-version"
+	NodeContainerRuntimeRund2Label   = "alibabacloud.com/flink-container-runtime"
+	RunvValue                        = "Sandboxed-Container.runv"
+	RuncValue                        = "runc"
+	Rund2Value                       = "rund-2.0"
+
 	VolumeDeleteAutoSnapshotKey                    = "csi.alibabacloud.com/volume-delete-autosnapshot-retentiondays"
 	VOLUME_EXPAND_AUTO_SNAPSHOT_OP_KEY             = "volumeExpandAutoSnapshot"
 	VOLUME_DELETE_AUTO_SNAPSHOT_OP_RETENT_DAYS_KEY = "volumeDeleteSnapshotRetentionDays"

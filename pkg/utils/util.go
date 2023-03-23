@@ -961,7 +961,15 @@ func FormatAndMount(diskMounter *k8smount.SafeFormatAndMount, source string, tar
 			case isExitError && ee.ExitStatus() == fsckErrorsCorrected:
 				log.Infof("Device %s has errors which were corrected by fsck.", source)
 			case isExitError && ee.ExitStatus() == fsckErrorsUncorrected:
-				return fmt.Errorf("'fsck' found errors on device %s but could not correct them: %s", source, string(out))
+				msg := fmt.Sprintf("'fsck -a' found errors on device %s but could not correct them: %s", source, string(out))
+				log.Errorf("formatAndMount: %v, retry fsck with -y", msg)
+				out, err = diskMounter.Exec.Command("fsck", "-y", source).CombinedOutput()
+				if err != nil {
+					nmsg := fmt.Sprintf("'fsck' found errors on device %s but retry with fsck -y failed: %v", source, err)
+					log.Errorf("formatAndMount: %v", nmsg)
+					return fmt.Errorf("formatAndMount: retry err: %s", nmsg)
+				}
+
 			case isExitError && ee.ExitStatus() > fsckErrorsUncorrected:
 			}
 		}
