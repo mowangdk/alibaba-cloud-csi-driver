@@ -74,6 +74,7 @@ type GlobalConfig struct {
 	DetachBeforeAttach    bool
 	DetachBeforeDelete    bool
 	DiskBdfEnable         bool
+	Managed               bool
 	ClientSet             *kubernetes.Clientset
 	FilesystemLosePercent float64
 	ClusterID             string
@@ -187,6 +188,10 @@ func GlobalConfigSet(nodeID string) *restclient.Config {
 			cfg.Burst = qpsi
 		}
 	}
+	isManaged := false
+	if managed := os.Getenv("MANAGED"); managed == "true" { 
+		isManaged = true
+	} 	
 	cfg.AcceptContentTypes = strings.Join([]string{runtime.ContentTypeProtobuf, runtime.ContentTypeJSON}, ",")
 	// snapshotClient does not support protobuf
 	snapClient, err := snapClientset.NewForConfig(cfg)
@@ -412,6 +417,7 @@ func GlobalConfigSet(nodeID string) *restclient.Config {
 		NodeID:                nodeID,
 		ZoneID:                zoneID,
 		CanAttach:             true,
+		Managed:               isManaged,
 		ADControllerEnable:    isADControllerEnable,
 		DiskTagEnable:         isDiskTagEnable,
 		DiskBdfEnable:         isDiskBdfEnable,
