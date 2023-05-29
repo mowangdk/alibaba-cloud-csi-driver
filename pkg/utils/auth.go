@@ -38,6 +38,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/credentials"
 	"io/ioutil"
+	v1 "k8s.io/api/core/v1"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -346,65 +347,89 @@ func getStsToken() AccessControl {
 	return AccessControl{AccessKeyID: roleAuth.AccessKeyID, AccessKeySecret: roleAuth.AccessKeySecret, StsToken: roleAuth.SecurityToken, UseMode: EcsRAMRole}
 }
 
+func GetManagedTokenFromSecret(secret *v1.Secret) (AccessControl, error) {
+	var err error
+	val, ok := secret.Data[MANAGED_TOKEN_CONFIG_KEY]
+	if !ok {
+		err = fmt.Errorf("failed to get managed token from secret")
+		return AccessControl{}, err
+	}
+	tokens, err := decodeToken(val)
+	if err != nil {
+		return AccessControl{}, err
+	}
+	return AccessControl{AccessKeyID: tokens.AccessKeyID, AccessKeySecret: tokens.AccessKeySecret, StsToken: tokens.SecurityToken, UseMode: ManagedToken}, nil
+}
+
+func decodeToken(secretData []byte) (tokens ManageTokens, err error) {
+
+	var akInfo AKInfo
+	err = json.Unmarshal(secretData, &akInfo)
+	if err != nil {
+		log.Errorf("decodeToken: error unmarshal token config: %v", err)
+		return ManageTokens{}, err
+	}
+	keyring := akInfo.Keyring
+	ak, err := Decrypt(akInfo.AccessKeyID, []byte(keyring))
+	if err != nil {
+		log.Errorf("decodeToken: failed to decode ak, err: %v", err)
+		return ManageTokens{}, err
+	}
+
+	sk, err := Decrypt(akInfo.AccessKeySecret, []byte(keyring))
+	if err != nil {
+		log.Errorf("decodeToken: failed to decode sk, err: %v", err)
+		return ManageTokens{}, err
+	}
+
+	token, err := Decrypt(akInfo.SecurityToken, []byte(keyring))
+	if err != nil {
+		log.Errorf("decodeToken: failed to decode token, err: %v", err)
+		return ManageTokens{}, err
+	}
+	layout := "2006-01-02T15:04:05Z"
+	t, err := time.Parse(layout, akInfo.Expiration)
+	if err != nil {
+		log.Errorf("decodeToken: Parse expiration error: %s", err.Error())
+	}
+	if t.Before(time.Now()) {
+		log.Errorf("invalid token which is expired, expiration as: %s", akInfo.Expiration)
+	}
+	tokens.AccessKeyID = string(ak)
+	tokens.AccessKeySecret = string(sk)
+	tokens.SecurityToken = string(token)
+
+	if akInfo.RoleAccessKeyID != "" && akInfo.RoleAccessKeySecret != "" {
+		roleAK, err := Decrypt(akInfo.RoleAccessKeyID, []byte(keyring))
+		if err != nil {
+			log.Errorf("decodeToken: failed to decode role ak, err: %v", err)
+			return ManageTokens{}, err
+		}
+		roleSK, err := Decrypt(akInfo.RoleAccessKeySecret, []byte(keyring))
+		if err != nil {
+			log.Errorf("decodeToken: failed to decode role sk, err : %v", err)
+			return ManageTokens{}, err
+		}
+		tokens.RoleAccessKeyID = string(roleAK)
+		tokens.RoleAccessKeySecret = string(roleSK)
+	}
+	tokens.RoleArn = akInfo.RoleArn
+	return tokens, nil
+}
+
 // GetManagedToken get ak from csi secret
 func getManagedToken() (tokens ManageTokens) {
-	var akInfo AKInfo
-	if _, err := os.Stat(ConfigPath); err == nil {
-		encodeTokenCfg, err := ioutil.ReadFile(ConfigPath)
-		if err != nil {
-			log.Errorf("failed to read token config, err: %v", err)
-			return ManageTokens{}
-		}
-		err = json.Unmarshal(encodeTokenCfg, &akInfo)
-		if err != nil {
-			log.Errorf("error unmarshal token config: %v", err)
-			return ManageTokens{}
-		}
-		keyring := akInfo.Keyring
-		ak, err := Decrypt(akInfo.AccessKeyID, []byte(keyring))
-		if err != nil {
-			log.Errorf("failed to decode ak, err: %v", err)
-			return ManageTokens{}
-		}
-
-		sk, err := Decrypt(akInfo.AccessKeySecret, []byte(keyring))
-		if err != nil {
-			log.Errorf("failed to decode sk, err: %v", err)
-			return ManageTokens{}
-		}
-
-		token, err := Decrypt(akInfo.SecurityToken, []byte(keyring))
-		if err != nil {
-			log.Errorf("failed to decode token, err: %v", err)
-			return ManageTokens{}
-		}
-		layout := "2006-01-02T15:04:05Z"
-		t, err := time.Parse(layout, akInfo.Expiration)
-		if err != nil {
-			log.Errorf("Parse expiration error: %s", err.Error())
-		}
-		if t.Before(time.Now()) {
-			log.Errorf("invalid token which is expired, expiration as: %s", akInfo.Expiration)
-		}
-		tokens.AccessKeyID = string(ak)
-		tokens.AccessKeySecret = string(sk)
-		tokens.SecurityToken = string(token)
-
-		if akInfo.RoleAccessKeyID != "" && akInfo.RoleAccessKeySecret != "" {
-			roleAK, err := Decrypt(akInfo.RoleAccessKeyID, []byte(keyring))
-			if err != nil {
-				log.Errorf("failed to decode role ak, err: %v", err)
-				return ManageTokens{}
-			}
-			roleSK, err := Decrypt(akInfo.RoleAccessKeySecret, []byte(keyring))
-			if err != nil {
-				log.Errorf("failed to decode role sk, err : %v", err)
-				return ManageTokens{}
-			}
-			tokens.RoleAccessKeyID = string(roleAK)
-			tokens.RoleAccessKeySecret = string(roleSK)
-		}
-		tokens.RoleArn = akInfo.RoleArn
+	if _, err := os.Stat(ConfigPath); err != nil {
+		return tokens
+	}
+	encodeTokenCfg, err := ioutil.ReadFile(ConfigPath)
+	if err != nil {
+		log.Errorf("failed to read token config, err: %v", err)
+		return ManageTokens{}
+	}
+	tokens, err = decodeToken(encodeTokenCfg)
+	if err != nil {
+		return ManageTokens{}
 	}
 	return tokens
 }

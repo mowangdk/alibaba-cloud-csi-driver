@@ -148,6 +148,21 @@ func NewDriver(nodeID, endpoint string, runAsController bool) *DISK {
 	return tmpdisk
 }
 
+func (disk *DISK) GetAccessControl() utils.AccessControl {
+	if !GlobalConfigVar.Managed {
+		return utils.GetAccessControl()
+	}
+	secret, err := GlobalConfigVar.ClientSet.CoreV1().Secrets(KUBE_SYSTEM_NAMESPACE).Get(context.Background(), MANAGED_CSI_TOKEN_NAME, metav1.GetOptions{})
+	if err != nil {
+		log.Log.Fatalf("GetAccessControl: failed to get secret from kube-system, err: %v", err)
+	}
+	accessControl, err := utils.GetManagedTokenFromSecret(secret)
+	if err != nil {
+		log.Log.Fatalf("GetAccessControl: failed to parse secret from kube-system, err: %v", err)
+	}
+	return accessControl
+}
+
 // Run start a new NodeServer
 func (disk *DISK) Run() {
 	log.Log.Infof("Starting csi-plugin Driver: %v version: %v", driverName, csiVersion)
@@ -189,9 +204,9 @@ func GlobalConfigSet(nodeID string) *restclient.Config {
 		}
 	}
 	isManaged := false
-	if managed := os.Getenv("MANAGED"); managed == "true" { 
+	if managed := os.Getenv("MANAGED"); managed == "true" {
 		isManaged = true
-	} 	
+	}
 	cfg.AcceptContentTypes = strings.Join([]string{runtime.ContentTypeProtobuf, runtime.ContentTypeJSON}, ",")
 	// snapshotClient does not support protobuf
 	snapClient, err := snapClientset.NewForConfig(cfg)
@@ -205,7 +220,7 @@ func GlobalConfigSet(nodeID string) *restclient.Config {
 		log.Log.Fatalf("Error building kubernetes clientset: %s", err.Error())
 	}
 
-	configMap, err := kubeClient.CoreV1().ConfigMaps("kube-system").Get(context.Background(), configMapName, metav1.GetOptions{})
+	configMap, err := kubeClient.CoreV1().ConfigMaps(KUBE_SYSTEM_NAMESPACE).Get(context.Background(), configMapName, metav1.GetOptions{})
 	if err != nil {
 		log.Log.Infof("Not found configmap named as csi-plugin under kube-system, with: %v", err)
 	} else {

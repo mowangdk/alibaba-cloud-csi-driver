@@ -7,6 +7,10 @@ import (
 
 const (
 
+	// KUBE_SYSTEM_NAMESPACE is kube-system namespace
+	KUBE_SYSTEM_NAMESPACE = "kube-system"
+	// MANAGED_CSI_TOKEN_NAME is managed csi token name
+	MANAGED_CSI_TOKEN_NAME = "addon.csi.token"
 	// ESSD_PERFORMANCE_LEVEL is storage class
 	ESSD_PERFORMANCE_LEVEL = "performanceLevel"
 	// DISKTAGKEY1 tag

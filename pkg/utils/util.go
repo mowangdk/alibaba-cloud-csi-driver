@@ -72,6 +72,8 @@ type DefaultOptions struct {
 }
 
 const (
+	// MANAGED_TOKEN_CONFIG_KEY is managed csi token configuration
+	MANAGED_TOKEN_CONFIG_KEY = "addon.token.config"
 	// UserAKID is user AK ID
 	UserAKID = "/etc/.volumeak/akId"
 	// UserAKSecret is user AK Secret
