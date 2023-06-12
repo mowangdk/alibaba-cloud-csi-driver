@@ -1106,6 +1106,8 @@ func (cs *controllerServer) autoSnapshot(ctx context.Context, disk *ecs.Disk) (b
 		return true, nil, nil
 	}
 
+	log.Log.Infof("ControllerExpandVolume: pv: %+v, diskid: %v", pv, disk.DiskId)
+
 	if pv.Spec.CSI == nil || pv.Spec.CSI.VolumeAttributes == nil {
 		log.Log.Errorf("ControllerExpandVolume: pv.Spec.CSI/Spec.CSI.VolumeAttributes is nil, volumeId=%s", disk.DiskId)
 		return true, nil, nil
