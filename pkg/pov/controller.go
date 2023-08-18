@@ -15,6 +15,7 @@ import (
 	labels "k8s.io/apimachinery/pkg/labels"
 
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/log"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/pov/cloud"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/pov/internal"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/utils"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/utils/template"
@@ -63,12 +64,21 @@ var controllerCaps = []csi.ControllerServiceCapability_RPC_Type{
 
 type controllerService struct {
 	attachDescribeTimes int
+	storageType         PovStorage
 	cloud               Cloud
 	inFlight            *internal.InFlight
 }
 
-func newControllerService() controllerService {
-	pov, err := newCloud()
+func newControllerService(storageType PovStorage) controllerService {
+
+	var pov Cloud
+	var err error
+	switch storageType {
+	case PovStorageDFS:
+		pov, err = cloud.NewDFSCloud(GlobalConfigVar.regionID)
+	case PovStorageCPFS:
+		pov, err = cloud.NewCPFSCloud(GlobalConfigVar.regionID)
+	}
 	if err != nil {
 		log.Log.Fatalf("newControllerService: init cloud err: %v", err)
 	}
@@ -150,15 +160,15 @@ func (d *controllerService) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 	spaceCapacity = utils.Bytes2GiB(volSizeBytes)
 
-	opts := PovOptions{
-		zoneID:                       zoneID,
-		dataRedundancyType:           dataRedundancyType,
-		protocolType:                 protocolType,
-		storageType:                  storageType,
-		capacity:                     spaceCapacity,
-		fsName:                       fileSystemName,
-		throughputMode:               throughputMode,
-		provisionedThroughputInmibps: provisionedThroughputInMiBps,
+	opts := cloud.PovOptions{
+		ZoneID:                       zoneID,
+		DataRedundancyType:           dataRedundancyType,
+		ProtocolType:                 protocolType,
+		StorageType:                  storageType,
+		Capacity:                     spaceCapacity,
+		FsName:                       fileSystemName,
+		ThroughputMode:               throughputMode,
+		ProvisionedThroughputInmibps: provisionedThroughputInMiBps,
 	}
 
 	fsId, requestID, err := d.cloud.CreateVolume(ctx, volName, &opts)
@@ -186,16 +196,16 @@ func (d *controllerService) getMountPointWithFileSystemID(ctx context.Context, r
 
 func (d *controllerService) getDefaultMountPoint(ctx context.Context, fsId string) string {
 
-	vmp, err := d.cloud.DescribeVscMountPoints(ctx, fsId, "")
+	vmp, err := d.cloud.DescribeFilesystemMountPoints(ctx, fsId)
 	if err != nil {
 		log.Log.Errorf("getDefaultMountPoint: describe vsc mountpoint failed, fsId: %s err: %v", fsId, err)
 		return ""
 	}
-	if len(vmp.MountPoints) == 0 {
+	if len(vmp.VscInfos) == 0 {
 		log.Log.Infof("getDefaultMountPoint: get empty mountpoint by fsId: %s", fsId)
 		return ""
 	}
-	return vmp.MountPoints[0].MountPointId
+	return *vmp.VscInfos[0].MountPointDomain
 }
 
 func addAdditionalParams(params map[string]string, fsId string, mpId string) map[string]string {
@@ -330,21 +340,19 @@ func (d *controllerService) ControllerPublishVolume(ctx context.Context, req *cs
 VSCREADY:
 	for i := 0; i < d.attachDescribeTimes && vscId == ""; i++ {
 		time.Sleep(4 * time.Second)
-		vmp, err := d.cloud.DescribeVscMountPoints(ctx, fsId, req.GetVolumeId())
+		vmp, err := d.cloud.DescribeMountPointVscIds(ctx, fsId, req.GetVolumeId())
 		if err != nil {
 			return nil, err
 		}
-		log.Log.Infof("ControllerPublishVolume: describe vsc mountpoint success, volumeid: %s mountpointids: %v", req.GetVolumeId(), vmp.MountPoints)
-		for _, mp := range vmp.MountPoints {
-			for _, ins := range mp.Instances {
-				if ins.InstanceId == req.GetNodeId() {
-					if ins.Status == NORMAL.String() && ins.Vscs[0].VscStatus == NORMAL.String() {
-						vscId = ins.Vscs[0].VscId
-						break VSCREADY
-					}
-				} else {
-					continue
+		log.Log.Infof("ControllerPublishVolume: describe vsc mountpoint success, volumeid: %s", req.GetVolumeId())
+		for _, mp := range vmp.VscInfos {
+			if *mp.InstanceId == req.GetNodeId() {
+				if ins.Vscs[0].Status.String() == cloud.NORMAL.String() {
+					vscId = ins.Vscs[0].Id
+					break VSCREADY
 				}
+			} else {
+				continue
 			}
 		}
 	}

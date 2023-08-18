@@ -21,12 +21,20 @@ const (
 	DriverName = "povplugin.csi.alibabacloud.com"
 )
 
+type PovStorage string
+
+const (
+	PovStorageCPFS PovStorage = "cpfs"
+	PovStorageDFS  PovStorage = "dfs"
+)
+
 var GlobalConfigVar GlobalConfig
 
 // Pangu Over Virtio
 type PoV struct {
-	endpoint string
-	srv      *grpc.Server
+	endpoint   string
+	povStorage PovStorage
+	srv        *grpc.Server
 
 	controllerService
 	nodeService
@@ -34,14 +42,15 @@ type PoV struct {
 
 func initDriver() {}
 
-func NewDriver(nodeID, endpoint string, runAsController bool) *PoV {
+func NewDriver(nodeID, endpoint string, povServer PovStorage, runAsController bool) *PoV {
 	initDriver()
 	poV := &PoV{}
 	poV.endpoint = endpoint
+	poV.povStorage = povServer
 	newGlobalConfig(runAsController)
 
 	if runAsController {
-		poV.controllerService = newControllerService()
+		poV.controllerService = newControllerService(povServer)
 	} else {
 		poV.nodeService = newNodeService()
 	}

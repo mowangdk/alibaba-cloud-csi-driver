@@ -115,6 +115,7 @@ var (
 	nodeID          = flag.String("nodeid", "", "node id")
 	runAsController = flag.Bool("run-as-controller", false, "Only run as controller service")
 	driver          = flag.String("driver", TypePluginDISK, "CSI Driver")
+	povServer       = flag.String("pov-server", string(pov.PovStorageDFS), "Pov server address")
 	// Deprecated: rootDir is instead by KUBELET_ROOT_DIR env.
 	rootDir = flag.String("rootdir", "/var/lib/kubelet/csi-plugins", "Kubernetes root directory")
 )
@@ -257,7 +258,7 @@ func main() {
 		case TypePluginPOV:
 			go func(endPoint string) {
 				defer wg.Done()
-				driver := pov.NewDriver(*nodeID, endPoint, *runAsController)
+				driver := pov.NewDriver(*nodeID, endPoint, pov.PovStorage(*povServer), *runAsController)
 				driver.Run()
 			}(endPointName)
 		default:
