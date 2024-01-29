@@ -84,6 +84,8 @@ const (
 	RuncRunTimeTag = "runc"
 	// RunvRunTimeTag tag
 	RunvRunTimeTag = "runv"
+	// RunDRunTimeTag tag
+	RundRunTimeTag = "rund"
 	// ServiceType tag
 	ServiceType = "SERVICE_TYPE"
 	// PluginService represents the csi-plugin type.
@@ -640,15 +642,11 @@ func GetPodRunTime(req *csi.NodePublishVolumeRequest, clientSet *kubernetes.Clie
 	runTimeValue := RuncRunTimeTag
 
 	// check pod.Spec.RuntimeClassName == "runv"
-	if podInfo.Spec.RuntimeClassName == nil {
+	if podInfo.Spec.RuntimeClassName == nil || *podInfo.Spec.RuntimeClassName == "" {
 		log.Infof("GetPodRunTime: Get without runtime(nil), %s, %s", podName, nameSpace)
-	} else if *podInfo.Spec.RuntimeClassName == "" {
-		log.Infof("GetPodRunTime: Get with empty runtime: %s, %s", podName, nameSpace)
-	} else {
+	} else if strings.TrimSpace(*podInfo.Spec.RuntimeClassName) == RunvRunTimeTag || strings.TrimSpace(*podInfo.Spec.RuntimeClassName) == RundRunTimeTag {
 		log.Infof("GetPodRunTime: Get PodInfo Successful: %s, %s, with runtime: %s", podName, nameSpace, *podInfo.Spec.RuntimeClassName)
-		if strings.TrimSpace(*podInfo.Spec.RuntimeClassName) == RunvRunTimeTag {
-			runTimeValue = RunvRunTimeTag
-		}
+		runTimeValue = *podInfo.Spec.RuntimeClassName
 	}
 
 	// Deprecated pouch为了支持k8s 1.12以前没有RuntimeClass的情况做的特殊逻辑，为了代码健壮性，这里做下支持
@@ -887,14 +885,6 @@ func LoadJSONData(dataFileName string) (map[string]string, error) {
 		return nil, fmt.Errorf("failed to parse json data file [%s]: %v", dataFileName, err)
 	}
 	return data, nil
-}
-
-// IsKataInstall check kata daemon installed
-func IsKataInstall() bool {
-	if IsFileExisting("/host/etc/kata-containers") || IsFileExisting("/host/etc/kata-containers2") {
-		return true
-	}
-	return false
 }
 
 // IsPathAvailiable

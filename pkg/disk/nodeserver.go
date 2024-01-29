@@ -83,6 +83,8 @@ const (
 	MixRunTimeMode = "runc-runv"
 	// RunvRunTimeMode tag
 	RunvRunTimeMode = "runv"
+	// RundRunTimeMode tag
+	RundRunTimeMode = "rund"
 	// InputOutputErr tag
 	InputOutputErr = "input/output error"
 	// FileSystemLoseCapacityPercent is the env of container
@@ -221,6 +223,10 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		log.Log.Errorf(msg)
 		return nil, status.Error(codes.InvalidArgument, msg)
 	}
+	runtime, err := utils.GetPodRunTime(req, ns.clientSet)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "NodePublishVolume: cannot get pod runtime: %v", err)
+	}
 
 	// running in runc/runv mode
 	if GlobalConfigVar.RunTimeClass == MixRunTimeMode {
@@ -231,9 +237,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		}
 
 		// check pod runtime
-		if runtime, err := utils.GetPodRunTime(req, ns.clientSet); err != nil {
-			return nil, status.Errorf(codes.Internal, "NodePublishVolume: cannot get pod runtime: %v", err)
-		} else if runtime == RunvRunTimeMode {
+		if runtime == RunvRunTimeMode {
 			log.Log.Infof("NodePublishVolume:: Kata Disk Volume %s Mount with: %v", req.VolumeId, req)
 			// umount the stage path, which is mounted in Stage (tmpfs)
 			if err := ns.unmountStageTarget(sourcePath); err != nil {
@@ -376,7 +380,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if utils.IsKataInstall() {
+	if runtime == RundRunTimeMode {
 		// save volume data to json file
 		volumeData := map[string]string{}
 		volumeData["csi.alibabacloud.com/fsType"] = fsType
