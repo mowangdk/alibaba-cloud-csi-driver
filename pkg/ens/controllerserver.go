@@ -23,6 +23,52 @@ type controllerServer struct {
 	createdVolumeMap map[string]*csi.Volume
 }
 
+// ControllerGetCapabilities implements csi.ControllerServer.
+// Subtle: this method shadows the method (*DefaultControllerServer).ControllerGetCapabilities of controllerServer.DefaultControllerServer.
+func (cs *controllerServer) ControllerGetCapabilities(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+	panic("unimplemented")
+}
+
+// ControllerGetVolume implements csi.ControllerServer.
+func (cs *controllerServer) ControllerGetVolume(context.Context, *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
+	panic("unimplemented")
+}
+
+// ControllerModifyVolume implements csi.ControllerServer.
+func (cs *controllerServer) ControllerModifyVolume(context.Context, *csi.ControllerModifyVolumeRequest) (*csi.ControllerModifyVolumeResponse, error) {
+	panic("unimplemented")
+}
+
+// CreateSnapshot implements csi.ControllerServer.
+// Subtle: this method shadows the method (*DefaultControllerServer).CreateSnapshot of controllerServer.DefaultControllerServer.
+func (cs *controllerServer) CreateSnapshot(context.Context, *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+	panic("unimplemented")
+}
+
+// DeleteSnapshot implements csi.ControllerServer.
+// Subtle: this method shadows the method (*DefaultControllerServer).DeleteSnapshot of controllerServer.DefaultControllerServer.
+func (cs *controllerServer) DeleteSnapshot(context.Context, *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+	panic("unimplemented")
+}
+
+// GetCapacity implements csi.ControllerServer.
+// Subtle: this method shadows the method (*DefaultControllerServer).GetCapacity of controllerServer.DefaultControllerServer.
+func (cs *controllerServer) GetCapacity(context.Context, *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
+	panic("unimplemented")
+}
+
+// ListSnapshots implements csi.ControllerServer.
+// Subtle: this method shadows the method (*DefaultControllerServer).ListSnapshots of controllerServer.DefaultControllerServer.
+func (cs *controllerServer) ListSnapshots(context.Context, *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+	panic("unimplemented")
+}
+
+// ListVolumes implements csi.ControllerServer.
+// Subtle: this method shadows the method (*DefaultControllerServer).ListVolumes of controllerServer.DefaultControllerServer.
+func (cs *controllerServer) ListVolumes(context.Context, *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
+	panic("unimplemented")
+}
+
 func NewControllerServer(d *csicommon.CSIDriver) csi.ControllerServer {
 
 	c := &controllerServer{

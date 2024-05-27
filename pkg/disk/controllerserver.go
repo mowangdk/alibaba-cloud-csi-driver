@@ -57,6 +57,29 @@ type controllerServer struct {
 	recorder record.EventRecorder
 }
 
+// ControllerGetCapabilities implements csi.ControllerServer.
+// Subtle: this method shadows the method (*DefaultControllerServer).ControllerGetCapabilities of controllerServer.DefaultControllerServer.
+func (cs *controllerServer) ControllerGetCapabilities(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+	panic("unimplemented")
+}
+
+// ControllerModifyVolume implements csi.ControllerServer.
+func (cs *controllerServer) ControllerModifyVolume(context.Context, *csi.ControllerModifyVolumeRequest) (*csi.ControllerModifyVolumeResponse, error) {
+	panic("unimplemented")
+}
+
+// GetCapacity implements csi.ControllerServer.
+// Subtle: this method shadows the method (*DefaultControllerServer).GetCapacity of controllerServer.DefaultControllerServer.
+func (cs *controllerServer) GetCapacity(context.Context, *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
+	panic("unimplemented")
+}
+
+// ListVolumes implements csi.ControllerServer.
+// Subtle: this method shadows the method (*DefaultControllerServer).ListVolumes of controllerServer.DefaultControllerServer.
+func (cs *controllerServer) ListVolumes(context.Context, *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
+	panic("unimplemented")
+}
+
 // Alicloud disk parameters
 type diskVolumeArgs struct {
 	Type                    []string
@@ -1196,4 +1219,8 @@ func (cs *controllerServer) deleteUntagAutoSnapshot(snapshotID, diskID string) {
 	if err != nil {
 		log.Errorf("ControllerExpandVolume:: failed to untag volumeExpandAutoSnapshot: %s", err.Error())
 	}
+}
+
+func (cs *controllerServer) ControllerGetVolume(ctx context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
+	panic("unimplemented")
 }

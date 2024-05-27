@@ -224,10 +224,19 @@ func (ns *nodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetC
 		},
 	}
 
+	nscap4 := &csi.NodeServiceCapability{
+		Type: &csi.NodeServiceCapability_Rpc{
+			Rpc: &csi.NodeServiceCapability_RPC{
+				Type: csi.NodeServiceCapability_RPC_VOLUME_CONDITION,
+			},
+		},
+	}
+
+
 	// Disk Metric enable config
 	nodeSvcCap := []*csi.NodeServiceCapability{nscap, nscap2}
 	if GlobalConfigVar.MetricEnable {
-		nodeSvcCap = []*csi.NodeServiceCapability{nscap, nscap2, nscap3}
+		nodeSvcCap = []*csi.NodeServiceCapability{nscap, nscap2, nscap3, nscap4}
 	}
 
 	return &csi.NodeGetCapabilitiesResponse{

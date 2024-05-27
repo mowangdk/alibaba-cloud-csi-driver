@@ -378,6 +378,9 @@ func GetMetrics(path string) (*csi.NodeGetVolumeStatsResponse, error) {
 				Unit:      csi.VolumeUsage_INODES,
 			},
 		},
+		VolumeCondition: &csi.VolumeCondition{
+			Abnormal: false,
+		},
 	}, nil
 }
 

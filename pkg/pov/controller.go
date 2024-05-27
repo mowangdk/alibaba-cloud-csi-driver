@@ -67,6 +67,16 @@ type controllerService struct {
 	inFlight            *internal.InFlight
 }
 
+// ControllerGetVolume implements csi.ControllerServer.
+func (d *controllerService) ControllerGetVolume(context.Context, *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
+	panic("unimplemented")
+}
+
+// ControllerModifyVolume implements csi.ControllerServer.
+func (d *controllerService) ControllerModifyVolume(context.Context, *csi.ControllerModifyVolumeRequest) (*csi.ControllerModifyVolumeResponse, error) {
+	panic("unimplemented")
+}
+
 func newControllerService() controllerService {
 	pov, err := newCloud()
 	if err != nil {

@@ -52,6 +52,16 @@ type controllerServer struct {
 	locks      *utils.VolumeLocks
 }
 
+// ControllerGetVolume implements csi.ControllerServer.
+func (cs *controllerServer) ControllerGetVolume(context.Context, *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
+	panic("unimplemented")
+}
+
+// ControllerModifyVolume implements csi.ControllerServer.
+func (cs *controllerServer) ControllerModifyVolume(context.Context, *csi.ControllerModifyVolumeRequest) (*csi.ControllerModifyVolumeResponse, error) {
+	panic("unimplemented")
+}
+
 func newControllerServer(config *internal.ControllerConfig) (*controllerServer, error) {
 	fac, err := internal.NewControllerFactory(config, defaultVolumeAs)
 	if err != nil {
