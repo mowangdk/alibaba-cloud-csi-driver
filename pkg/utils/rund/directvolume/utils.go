@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+const (
+	RunDVersion2MountKey = "csi.alibabacloud.com/disk-mounted"
+	RunDVersionGlobalMountKey =  "csi.alibabacloud.com/disk-mounted"
+)
+
 func AddMountInfo(volumePath string, mountInfo MountInfo) error {
 	data, _ := json.Marshal(mountInfo)
 
@@ -14,7 +19,7 @@ func AddMountInfo(volumePath string, mountInfo MountInfo) error {
 }
 
 func IsRunD3VolumePath(volumePath string) (*MountInfo, bool) {
-	mountInfo, err := VolumeMountInfo(volumePath)
+	mountInfo, err := VolumeMountInfo(filepath.Dir(volumePath))
 	if err != nil {
 		return nil, false
 	}
@@ -37,7 +42,7 @@ func IsRunD2VolumePath(volumePath string) bool {
 	if err := json.NewDecoder(file).Decode(&data); err != nil {
 		return false
 	}
-	if _, ok := data["csi.alibabacloud.com/disk-mounted"]; ok {
+	if _, ok := data[RunDVersion2MountKey]; ok {
 		return true
 	}
 	return false

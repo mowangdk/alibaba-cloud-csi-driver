@@ -56,13 +56,15 @@ type BdfAttachInfo struct {
 }
 
 // FindLines parse lines
-func FindLines(reader io.Reader, keyword string) []string {
+func FindLines(reader io.Reader, keywords []string) []string {
 	var matched []string
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.Contains(line, keyword) {
-			matched = append(matched, line)
+		for _, keyword := range keywords {
+			if strings.Contains(line, keyword) {
+				matched = append(matched, line)
+			}
 		}
 	}
 	return matched
@@ -133,7 +135,7 @@ func findBdf(diskID string) (bdf string, err error) {
 		return "", err
 	}
 	// 0000:a1:00.0 SCSI storage controller: Red Hat, Inc Virtio block device
-	matched := FindLines(output, "Virtio block device")
+	matched := FindLines(output, []string{"Virtio block device", "1001"})
 	if len(matched) == 0 {
 		return "", nil
 	}
@@ -151,8 +153,8 @@ func findBdf(diskID string) (bdf string, err error) {
 	if err != nil {
 		return "", err
 	}
-	//    Region 0: Memory at 00000000ed501000 (64-bit, prefetchable)
-	matched = FindLines(output, "\t\tRegion 0: Memory at")
+	// Region 0: Memory at 00000000ed501000 (64-bit, prefetchable)
+	matched = FindLines(output, []string{"\t\tRegion 0: Memory at"})
 	// 非bdf机型是匹配不到这个信息的
 	if len(matched) == 0 {
 		return "", nil
@@ -160,6 +162,7 @@ func findBdf(diskID string) (bdf string, err error) {
 	if _, err = fmt.Sscanf(matched[len(matched)-1], "\t\tRegion 0: Memory at %x", &bar0); err != nil {
 		return "", err
 	}
+	log.Infof("findBdf: find lasted matched mem base address: %v", matched[len(matched)-1])
 
 	pgsize := syscall.Getpagesize()
 	base := bar0 & (^(uint64(pgsize - 1)))
@@ -418,7 +421,7 @@ func IsVFNode() bool {
 				log.Fatalf("[IsVFNode] lspci -D: %v", err)
 			}
 			// 0000:4b:00.0 SCSI storage controller: Device 1ded:1001 or SCSI storage controller: Alibaba (China) Co., Ltd.
-			matched := FindLines(output, "storage controller")
+			matched := FindLines(output, []string{"storage controller"})
 			if len(matched) == 0 {
 				log.Errorf("[IsVFNode] not found storage controller")
 				return
@@ -438,7 +441,7 @@ func IsVFNode() bool {
 					return
 				}
 				// Capabilities: [110] Single Root I/O Virtualization (SR-IOV)
-				matched = FindLines(output, "Single Root I/O Virtualization")
+				matched = FindLines(output, []string{"Single Root I/O Virtualization"})
 				if len(matched) > 0 {
 					isVF = true
 					isVFInstance = true

@@ -289,18 +289,22 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return &csi.NodePublishVolumeResponse{}, nil
 	case utils.RundRunTimeTag:
 		if directvolume.IsRunDVolumeAlreadyMount(req.TargetPath) {
-			log.Infof("NodePublishVolume: TargetPath: %s already mounted by csi3.0/csi2.0 protocol", req.TargetPath)
+			log.Infof("NodePublishVolume(runD): TargetPath: %s already mounted by csi3.0/csi2.0 protocol", req.TargetPath)
 			return &csi.NodePublishVolumeResponse{}, nil
 		}
-		log.Infof("NodePublishVolume: TargetPath: %s is umounted, start mount in kata mode", req.TargetPath)
+		log.Infof("NodePublishVolume(runD): TargetPath: %s is umounted, start mount in kata mode", req.TargetPath)
 		mountFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
-		returned, err := ns.mountRunDVolumes(req.VolumeId, sourcePath, req.TargetPath, fsType, mkfsOptions, isBlock, mountFlags)
+		err := ns.mountRunDVolumes(req.VolumeId, sourcePath, req.TargetPath, fsType, mkfsOptions, isBlock, mountFlags)
 		if err != nil {
 			return nil, err
 		}
-		if returned {
-			return &csi.NodePublishVolumeResponse{}, nil
+		fileName := filepath.Join(filepath.Dir(sourcePath), utils.VolDataFileName)
+		err = utils.AppendJSONData(fileName, map[string]string{directvolume.RunDVersionGlobalMountKey: "true"})
+		if err != nil {
+			log.Errorf("NodePublishVolume(runD): failed to write data to globalmount path: %v", err)
+			return nil, err
 		}
+		return &csi.NodePublishVolumeResponse{}, nil
 	}
 
 	// check if block volume
@@ -501,7 +505,7 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	}
 	volumeData, err := utils.LoadJSONData(fileName)
 	if err == nil {
-		if _, ok := volumeData["csi.alibabacloud.com/disk-mounted"]; ok {
+		if _, ok := volumeData[directvolume.RunDVersionGlobalMountKey]; ok {
 			log.Infof("NodeStageVolume:  volumeId: %s, Path: %s is already mounted in kata mode", req.VolumeId, targetPath)
 			return &csi.NodeStageVolumeResponse{}, nil
 		}
@@ -558,6 +562,9 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		device, err = DefaultDeviceManager.GetDeviceByVolumeID(req.GetVolumeId())
 		if err != nil {
 			if IsVFNode() {
+				if GlobalConfigVar.RunDWithBDF {
+					return &csi.NodeStageVolumeResponse{}, nil
+				}
 				bdf, err := bindBdfDisk(req.GetVolumeId())
 				if err != nil {
 					if err := unbindBdfDisk(req.GetVolumeId()); err != nil {
@@ -656,17 +663,6 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		log.Errorf("Mountdevice: FormatAndMount fail with mkfsOptions %s, %s, %s, %s, %s with error: %s", device, targetPath, fsType, mkfsOptions, mountOptions, err.Error())
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	// if len(mkfsOptions) > 0 && (fsType == "ext4" || fsType == "ext3") {
-	// 	if err := utils.FormatAndMount(diskMounter, device, targetPath, fsType, mkfsOptions, mountOptions, GlobalConfigVar.OmitFilesystemCheck); err != nil {
-	// 		log.Errorf("Mountdevice: FormatAndMount fail with mkfsOptions %s, %s, %s, %s, %s with error: %s", device, targetPath, fsType, mkfsOptions, mountOptions, err.Error())
-	// 		return nil, status.Error(codes.Internal, err.Error())
-	// 	}
-	// } else {
-	// 	if err := diskMounter.FormatAndMount(device, targetPath, fsType, mountOptions); err != nil {
-	// 		log.Errorf("NodeStageVolume: Volume: %s, Device: %s, FormatAndMount error: %s", req.VolumeId, device, err.Error())
-	// 		return nil, status.Error(codes.Internal, err.Error())
-	// 	}
-	// }
 	log.Infof("NodeStageVolume: Mount Successful: volumeId: %s target %v, device: %s, mkfsOptions: %v, options: %v", req.VolumeId, targetPath, device, mkfsOptions, mountOptions)
 	_, pvc, err := getPvPvcFromDiskId(req.VolumeId)
 	if err != nil {
@@ -1184,6 +1180,25 @@ func (ns *nodeServer) umountRunDVolumes(volumePath string) (bool, error) {
 			log.Errorf("NodeUnPublishVolume:: Remove mount info for DirectVolume failed: %v", err)
 			return true, status.Error(codes.Internal, err.Error())
 		}
+		if val, ok := mountInfo.Extra["oriDriverType"]; ok && val != "" {
+			d, _ := NewDeviceDriver("", mountInfo.Source, BDF, nil)
+			cDriver, err := d.CurentDriver()
+			if err != nil {
+				return true, status.Error(codes.Internal, err.Error())
+			}
+			if cDriver != DFBusTypeVFIO {
+				return true, status.Error(codes.Internal, "moc(BDF) mode only support vfio")
+			}
+			err = d.UnbindDriver()
+			if err != nil {
+				return true, status.Errorf(codes.Internal, "moc(BDF) unbind err: %s", err.Error())
+			}
+			err = d.BindDriver(val)
+			if err != nil {
+				return true, status.Errorf(codes.Internal, "moc(BDF) bind err: %s", err.Error())
+			}
+
+		}
 		return true, nil
 	}
 	log.Infof("NodeUnPublishVolume:: start delete mount info for DirectVolume: %s", volumePath)
@@ -1237,7 +1252,7 @@ func (ns *nodeServer) mountRunvVolumes(volumeId, sourcePath, targetPath, fsType,
 	}
 	// save volume status to stage json file
 	volumeStatus := map[string]string{}
-	volumeStatus["csi.alibabacloud.com/disk-mounted"] = "true"
+	volumeStatus[directvolume.RunDVersion2MountKey] = "true"
 	fileName := filepath.Join(filepath.Dir(sourcePath), directvolume.RunD2MountInfoFileName)
 	if strings.HasSuffix(sourcePath, "/") {
 		fileName = filepath.Join(filepath.Dir(filepath.Dir(sourcePath)), directvolume.RunD2MountInfoFileName)
@@ -1248,52 +1263,74 @@ func (ns *nodeServer) mountRunvVolumes(volumeId, sourcePath, targetPath, fsType,
 	return nil
 }
 
-func (ns *nodeServer) mountRunDVolumes(volumeId, sourcePath, targetPath, fsType, mkfsOptions string, isRawBlock bool, mountFlags []string) (bool, error) {
-	log.Infof("NodePublishVolume:: Disk Volume %s Mounted in RunD csi 3.0/2.0 protocol", volumeId)
+func (ns *nodeServer) mountRunDVolumes(volumeId, sourcePath, targetPath, fsType, mkfsOptions string, isRawBlock bool, mountFlags []string) error {
+	log.Infof("NodePublishVolume(rund): Disk Volume %s Mounted in RunD csi 3.0/2.0 protocol", volumeId)
 	deviceName, err := DefaultDeviceManager.GetDeviceByVolumeID(volumeId)
+	var bdf string
 	if err != nil {
+		log.Errorf("NodePublishVolume(rund): get devicename from os failed err: %v, volumeId: %s, start get from configfile", err, volumeId)
 		deviceName = getVolumeConfig(volumeId)
 	}
 	if deviceName == "" {
-		log.Errorf("NodePublishVolume(rund): cannot get local deviceName for volume:  %s", volumeId)
-		return true, status.Error(codes.InvalidArgument, "NodePublishVolume: cannot get local deviceName for volume: "+volumeId)
+		log.Errorf("NodePublishVolume(rund): unenable to retrieve deviceName for volume  %s commencing BDF retrieval process", volumeId)
+		bdf, err = findBdf(volumeId)
+		if bdf == "" || err != nil {
+			return status.Error(codes.InvalidArgument, fmt.Sprintf("NodePublishVolume(rund): cannot get BDF of volume:%s, err: %v", volumeId, err))
+		}
 	}
+	log.Infof("NodePublishVolume(rund): volumeId: %s has devicename: %s, bdf: %s", volumeId, deviceName, bdf)
 	volumePath := filepath.Dir(targetPath)
 
-	// Block runs csi3.0 protocol
-	if isRawBlock {
-		// umount the stage path, which is mounted in Stage
-		if err := ns.unmountStageTarget(sourcePath); err != nil {
-			log.Errorf("NodePublishVolume(rund3.0): unmountStageTarget %s with error: %s", sourcePath, err.Error())
-			return true, status.Error(codes.InvalidArgument, "NodePublishVolume: unmountStageTarget "+sourcePath+" with error: "+err.Error())
+	// alltypes storage runs csi3.0 protocol
+	// umount the stage path, which is mounted in Stage
+	if err := ns.unmountStageTarget(sourcePath); err != nil {
+		log.Errorf("NodePublishVolume(rund3.0): unmountStageTarget %s with error: %s", sourcePath, err.Error())
+		return status.Error(codes.InvalidArgument, "NodePublishVolume: unmountStageTarget "+sourcePath+" with error: "+err.Error())
+	}
+	log.Infof("NodePublishVolume(rund3.0): get bdf number by device: %s", deviceName)
+	deviceNumber := ""
+	deviceType := directvolume.DeviceTypePCI
+	extras := make(map[string]string)
+	if ns.kataBMIOType == DFBus {
+		deviceType = directvolume.DeviceTypeDFBusPort
+		driver, err := NewDeviceDriver(deviceName, "", DFBus, map[string]string{})
+		if err != nil {
+			log.Errorf("NodePublishVolume(rund3.0): can't get dfbusport number of volume:  %s: err: %v", volumeId, err)
+			return status.Error(codes.InvalidArgument, "NodePublishVolume: cannot get bdf number of volume: "+volumeId)
 		}
-		log.Infof("NodePublishVolume(rund3.0): get bdf number by device: %s", deviceName)
-		deviceNumber := ""
-		deviceType := directvolume.DeviceTypePCI
-		if ns.kataBMIOType == DFBus {
-			deviceType = directvolume.DeviceTypeDFBusPort
-			driver, err := NewDeviceDriver(deviceName, "", DFBus, map[string]string{})
-			if err != nil {
-				log.Errorf("NodePublishVolume(rund3.0): can't get dfbusport number of volume:  %s: err: %v", volumeId, err)
-				return true, status.Error(codes.InvalidArgument, "NodePublishVolume: cannot get bdf number of volume: "+volumeId)
-			}
-			deviceNumber = driver.GetDeviceNumber()
-			// we can find deviceName means that device is bind to virtio driver
+		deviceNumber = driver.GetDeviceNumber()
+		// we can find deviceName means that device is bind to virtio driver
+		if err := driver.UnbindDriver(); err != nil {
+			log.Errorf("NodePublishVolume(rund3.0): can't unbind current device driver: %s", deviceNumber)
+			return status.Error(codes.InvalidArgument, "NodePublishVolume: cannot unbind current device driver: "+deviceNumber)
+		}
+		if err = driver.BindDriver(DFBusTypeVFIO); err != nil {
+			log.Errorf("NodePublishVolume(rund3.0): can't bind vfio driver to device: %s", deviceNumber)
+		}
+	} else {
+		driver, err := NewDeviceDriver(deviceName, bdf, BDF, map[string]string{})
+		if err != nil {
+			log.Errorf("NodePublishVolume(rund3.0): can't get bdf number of volume:  %s: err: %v", volumeId, err)
+			return status.Error(codes.InvalidArgument, "NodePublishVolume(rund3.0): cannot get bdf number of volume: "+volumeId)
+		}
+		deviceNumber = driver.GetDeviceNumber()
+		currDriver, err := driver.CurentDriver() 
+		if err != nil {
+			return status.Error(codes.InvalidArgument, "NodePublishVolume(rund3.0): cannot get current device driver: "+deviceNumber)
+		}
+		extras["oriDriverType"] = currDriver
+		if currDriver != PCITypeVFIO {
 			if err := driver.UnbindDriver(); err != nil {
 				log.Errorf("NodePublishVolume(rund3.0): can't unbind current device driver: %s", deviceNumber)
-				return true, status.Error(codes.InvalidArgument, "NodePublishVolume: cannot unbind current device driver: "+deviceNumber)
+				return status.Error(codes.InvalidArgument, "NodePublishVolume: cannot unbind current device driver: "+deviceNumber)
 			}
 			if err = driver.BindDriver(DFBusTypeVFIO); err != nil {
 				log.Errorf("NodePublishVolume(rund3.0): can't bind vfio driver to device: %s", deviceNumber)
 			}
-		} else {
-			driver, err := NewDeviceDriver(deviceName, "", BDF, map[string]string{})
-			if err != nil {
-				log.Errorf("NodePublishVolume(rund3.0): can't get bdf number of volume:  %s: err: %v", volumeId, err)
-				return true, status.Error(codes.InvalidArgument, "NodePublishVolume: cannot get bdf number of volume: "+volumeId)
-			}
-			deviceNumber = driver.GetDeviceNumber()
 		}
+		log.Infof("NodePublishVolume(rund3.0) bdf: %s is now with vfio driver, early driver: %s", deviceNumber, currDriver)
+	}
+	if isRawBlock {
 		deviceUid := 0
 		deviceGid := 0
 		deviceInfo, err := os.Stat(deviceName)
@@ -1304,99 +1341,51 @@ func (ns *nodeServer) mountRunDVolumes(volumeId, sourcePath, targetPath, fsType,
 			deviceUid = int(stat.Uid)
 			deviceGid = int(stat.Gid)
 		}
-		extras := make(map[string]string)
 		extras["Type"] = "b"
 		extras["FileMode"] = directvolume.BlockFileModeReadWrite
 		extras["Uid"] = strconv.Itoa(deviceUid)
 		extras["Gid"] = strconv.Itoa(deviceGid)
-		mountOptions := []string{}
-		if mountFlags != nil {
-			mountOptions = mountFlags
-		}
-
-		mountInfo := directvolume.MountInfo{
-			Source:     deviceNumber,
-			DeviceType: deviceType,
-			MountOpts:  mountOptions,
-			Extra:      extras,
-			FSType:     fsType,
-		}
-
-		log.Info("NodePublishVolume(rund3.0): Starting add mount info to DirectVolume")
-		err = directvolume.AddMountInfo(volumePath, mountInfo)
-		if err != nil {
-			log.Errorf("NodePublishVolume(rund3.0): Adding mount infomation to DirectVolume failed: %v", err)
-			return true, err
-		}
-		log.Info("NodePublishVolume(rund3.0): Adding mount information to DirectVolume succeeds, return immediately")
-		return true, nil
+	}
+	mountOptions := []string{}
+	if mountFlags != nil {
+		mountOptions = mountFlags
 	}
 
-	if ns.kataBMIOType == DFBus {
-		// umount the stage path, which is mounted in Stage
-		if err := ns.unmountStageTarget(sourcePath); err != nil {
-			log.Errorf("NodePublishVolume(rund3.0): unmountStageTarget in vmoc(DFBus) mode %s with error: %s", sourcePath, err.Error())
-			return true, status.Error(codes.InvalidArgument, "NodePublishVolume: unmountStageTarget in vmoc(DFBus) "+sourcePath+" with error: "+err.Error())
-		}
-		log.Infof("NodePublishVolume(rund3.0): get dfbusport number by device: %s", deviceName)
-		driver, err := NewDeviceDriver(deviceName, "", DFBus, map[string]string{})
-		if err != nil {
-			log.Errorf("NodePublishVolume(rund3.0): can't get dfbusport number of volume:  %s: err: %v", volumeId, err)
-			return true, status.Error(codes.InvalidArgument, "NodePublishVolume: cannot get bdf number of volume: "+volumeId)
-		}
-		// we can find deviceName means that device is bind to virtio driver
-		if err := driver.UnbindDriver(); err != nil {
-			log.Errorf("NodePublishVolume(rund3.0): can't unbind current device driver: %s", driver.GetDeviceNumber())
-			return true, status.Error(codes.InvalidArgument, "NodePublishVolume: cannot unbind current device driver: "+driver.GetDeviceNumber())
-		}
-		if err = driver.BindDriver(DFBusTypeVFIO); err != nil {
-			log.Errorf("NodePublishVolume(rund3.0): can't bind vfio driver to device: %s", driver.GetDeviceNumber())
-		}
-		if err != nil {
-			log.Errorf("NodePublishVolume(rund3.0): can't get dfbusport number of volume:  %s: err: %v", volumeId, err)
-			return true, status.Error(codes.InvalidArgument, "NodePublishVolume: cannot get dfbusport number of volume: "+volumeId)
-		}
-		mountOptions := []string{}
-		if mountFlags != nil {
-			mountOptions = mountFlags
-		}
-
-		mountInfo := directvolume.MountInfo{
-			Source:     driver.GetDeviceNumber(),
-			DeviceType: directvolume.DeviceTypeDFBusPort,
-			MountOpts:  mountOptions,
-			Extra:      map[string]string{},
-			FSType:     fsType,
-		}
-
-		log.Info("NodePublishVolume(rund3.0): Starting add vmoc(DFBus) mount info to DirectVolume")
-		err = directvolume.AddMountInfo(volumePath, mountInfo)
-		if err != nil {
-			log.Errorf("NodePublishVolume(rund3.0): vmoc(DFBus) Adding vmoc mount infomation to DirectVolume failed: %v", err)
-			return true, err
-		}
-		log.Info("NodePublishVolume(rund3.0): Adding vmoc(DFBus) mount information to DirectVolume succeeds, return immediately")
-		return true, nil
+	mountInfo := directvolume.MountInfo{
+		Source:     deviceNumber,
+		DeviceType: deviceType,
+		MountOpts:  mountOptions,
+		Extra:      extras,
+		FSType:     fsType,
 	}
+
+	log.Info("NodePublishVolume(rund3.0): Starting add mount info to DirectVolume")
+	err = directvolume.AddMountInfo(volumePath, mountInfo)
+	if err != nil {
+		log.Errorf("NodePublishVolume(rund3.0): Adding mount infomation to DirectVolume failed: %v", err)
+		return err
+	}
+	log.Info("NodePublishVolume(rund3.0): Adding mount information to DirectVolume succeeds, return immediately")
+	return nil
 
 	// (runD2.0) Need write mountOptions(metadata) parameters to file, and run normal runc process
-	log.Infof("NodePublishVolume(rund): run csi runD protocol 2.0 logic")
-	volumeData := map[string]string{}
-	volumeData["csi.alibabacloud.com/fsType"] = fsType
-	if len(mountFlags) != 0 {
-		volumeData["csi.alibabacloud.com/mountOptions"] = strings.Join(mountFlags, ",")
-	}
-	if mkfsOptions != "" {
-		volumeData["csi.alibabacloud.com/mkfsOptions"] = mkfsOptions
-	}
-	volumeData["csi.alibabacloud.com/disk-mounted"] = "true"
-	fileName := filepath.Join(filepath.Dir(targetPath), directvolume.RunD2MountInfoFileName)
-	if strings.HasSuffix(targetPath, "/") {
-		fileName = filepath.Join(filepath.Dir(filepath.Dir(targetPath)), directvolume.RunD2MountInfoFileName)
-	}
-	if err = utils.AppendJSONData(fileName, volumeData); err != nil {
-		log.Warnf("NodeStageVolume: append volume spec to %s with error: %s", fileName, err.Error())
-	}
-	return false, nil
+	// log.Infof("NodePublishVolume(rund): run csi runD protocol 2.0 logic")
+	// volumeData := map[string]string{}
+	// volumeData["csi.alibabacloud.com/fsType"] = fsType
+	// if len(mountFlags) != 0 {
+	// 	volumeData["csi.alibabacloud.com/mountOptions"] = strings.Join(mountFlags, ",")
+	// }
+	// if mkfsOptions != "" {
+	// 	volumeData["csi.alibabacloud.com/mkfsOptions"] = mkfsOptions
+	// }
+	// volumeData["csi.alibabacloud.com/disk-mounted"] = "true"
+	// fileName := filepath.Join(filepath.Dir(targetPath), directvolume.RunD2MountInfoFileName)
+	// if strings.HasSuffix(targetPath, "/") {
+	// 	fileName = filepath.Join(filepath.Dir(filepath.Dir(targetPath)), directvolume.RunD2MountInfoFileName)
+	// }
+	// if err = utils.AppendJSONData(fileName, volumeData); err != nil {
+	// 	log.Warnf("NodeStageVolume: append volume spec to %s with error: %s", fileName, err.Error())
+	// }
+	// return false, nil
 
 }

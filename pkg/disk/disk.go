@@ -74,6 +74,7 @@ type GlobalConfig struct {
 	ClusterID             string
 	ControllerService     bool
 	BdfHealthCheck        bool
+	RunDWithBDF           bool
 	DiskMultiTenantEnable bool
 	CheckBDFHotPlugin     bool
 	SnapClient            *snapClientset.Clientset
@@ -227,6 +228,7 @@ func GlobalConfigSet(m metadata.MetadataProvider) *restclient.Config {
 		ClusterID:             os.Getenv("CLUSTER_ID"),
 		ControllerService:     controllerServerType,
 		BdfHealthCheck:        csiCfg.GetBool("bdf-health-check", "BDF_HEALTH_CHECK", true),
+		RunDWithBDF:           csiCfg.GetBool("runD-with-bdf", "RUND_WITH_BDF", false),
 		DiskMultiTenantEnable: csiCfg.GetBool("disk-multi-tenant-enable", "DISK_MULTI_TENANT_ENABLE", false),
 		NodeMultiZoneEnable:   csiCfg.GetBool("node-multi-zone-enable", "NODE_MULTI_ZONE_ENABLE", false),
 		WaitBeforeAttach:      csiCfg.GetBool("wait-before-attach", "WAIT_BEFORE_ATTACH", false),
