@@ -459,6 +459,7 @@ spec:
             items:
             - key: addon.token.config
               path: token-config
-            secretName: addon.csi.token
+            secretName: addon.aliyuncsmanagedcsiprovisionerrole.token
+{{- end -}}
 {{- end -}}
 {{- end -}}

@@ -65,6 +65,8 @@ deploy:
   clusterID: null  # will be injected on installation on ACK
   regionID: null  # useful when deploying on non-ECS, but need to access Alibaba Cloud OpenAPI
 
+  newProvisionerAddonToken: true
+
   # To access Alibaba Cloud OpenAPI in self-deployed Kubernetes cluster, use a Secret with "id" and "secret" set.
   accessKey:
     enabled: false
