@@ -360,6 +360,7 @@ func prepareMountInfos(req *csi.NodePublishVolumeRequest) ([]string, string) {
 func GetVolumeIDByDevice(device string) (volumeID string, err error) {
 	// get volume by serial number feature
 	deviceName := device
+	klog.Infof("GetVolumeIDByDevice: start to get devices by deviceID: %s", device)
 	if strings.HasPrefix(device, "/dev/") {
 		deviceName = strings.TrimPrefix(device, "/dev/")
 	} else if strings.HasPrefix(device, "/") {
@@ -373,6 +374,7 @@ func GetVolumeIDByDevice(device string) (volumeID string, err error) {
 	}
 
 	// Get volume by disk by-id feature
+	klog.Infof("GetVolumeIDByDevice: start to get seriesFile: %s", serialFile)
 	byIDPath := "/dev/disk/by-id/"
 	files, _ := ioutil.ReadDir(byIDPath)
 	for _, f := range files {
@@ -386,10 +388,12 @@ func GetVolumeIDByDevice(device string) (volumeID string, err error) {
 			}
 			if strings.HasSuffix(resolved, device) {
 				volumeID = strings.Replace(f.Name(), "virtio-", "d-", -1)
+				klog.Infof("GetVolumeIDByDevice: start to get volumeID: %s", volumeID)
 				return volumeID, nil
 			}
 		}
 	}
+	klog.Infof("GetVolumeIDByDevice: return empty for device: %s", device)
 	return "", nil
 }
 
@@ -830,6 +834,7 @@ func CheckDeviceAvailable(devicePath, volumeID, targetPath string) error {
 }
 
 func checkDeviceAvailable(mountinfoPath, devicePath, volumeID, targetPath string) error {
+	klog.Info("checkDeviceAvailable: start to check devices")
 	if devicePath == "" {
 		return fmt.Errorf("devicePath is empty, cannot used for Volume")
 	}
@@ -839,6 +844,7 @@ func checkDeviceAvailable(mountinfoPath, devicePath, volumeID, targetPath string
 		return err
 	}
 
+	klog.Infof("checkDeviceAvailable: devicePath: %s", devicePath)
 	// block volume
 	if devicePath == "devtmpfs" {
 		device := getMountedVolumeDevice(mnts, targetPath)
