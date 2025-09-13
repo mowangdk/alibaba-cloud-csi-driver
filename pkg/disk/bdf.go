@@ -563,6 +563,7 @@ func NewDeviceDriver(volumeId, blockDevice, deviceNumber string, _type MachineTy
 	if d.deviceNumber != "" {
 		return d, nil
 	}
+	klog.InfoS("NewDeviceDriver: start to get deviceNumber from volumeId", "volumeId", volumeId, "type", _type)
 	if _type == DFBus {
 		matchesFile, err := filepath.Glob(dfBusDevicePathPattern)
 		if err != nil {
@@ -580,7 +581,9 @@ func NewDeviceDriver(volumeId, blockDevice, deviceNumber string, _type MachineTy
 			if infos[0] != "block" {
 				continue
 			}
-			if infos[1] == strings.TrimPrefix(volumeId, "d-") {
+			realDevice := strings.TrimSpace(infos[1])
+			klog.InfoS("NewDeviceDriver: start to get deviceNumber from volumeId", "volumeId", volumeId, "infos1", infos[1], "rinfos1", realDevice, "path", path)
+			if realDevice == strings.TrimPrefix(volumeId, "d-") {
 				DFNumber := filepath.Base(filepath.Dir(path))
 				d.deviceNumber = DFNumber
 				return d, nil
