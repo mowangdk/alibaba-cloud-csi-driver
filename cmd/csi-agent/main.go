@@ -105,6 +105,8 @@ func main() {
 		agent = disk.NewCSIAgent()
 	case "nasplugin.csi.alibabacloud.com":
 		agent = nas.NewCSIAgent(mountProxySocket)
+	case "local-passthrough.csi.alibabacloud.com":
+		agent = &noopAgent{}
 	default:
 		printError(fmt.Errorf("invalid CSI_DRIVER: %q", driver))
 		os.Exit(1)
@@ -135,4 +137,25 @@ func printError(err error) {
 
 type fakeAgent struct {
 	csi.UnimplementedNodeServer
+}
+
+// noopAgent is a no-op agent with no extra capabilities.
+// NodePublish and NodeUnpublish return success immediately without performing any action.
+type noopAgent struct {
+	csi.UnimplementedNodeServer
+}
+
+func (a *noopAgent) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+	fmt.Printf("NodeGetCapabilities is called, noopAgent returns success immediately")
+	return &csi.NodeGetCapabilitiesResponse{}, nil
+}
+
+func (a *noopAgent) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+	fmt.Printf("NodePublishVolume is called, noopAgent returns success immediately")
+	return &csi.NodePublishVolumeResponse{}, nil
+}
+
+func (a *noopAgent) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+	fmt.Printf("NodeUnpublishVolume is called, noopAgent returns success immediately")
+	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
