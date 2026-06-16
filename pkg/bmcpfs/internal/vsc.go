@@ -88,6 +88,27 @@ func NewVscManager(eflo *efloClient.Client, ecs *ecsClient.Client) VscManager {
 	}
 }
 
+const mockAPIDelay = 100 * time.Millisecond
+
+// FakeVscID returns the deterministic fake VSC ID for a given instance.
+func FakeVscID(instanceID string) string {
+	return fmt.Sprintf("fake-vsc-%s", instanceID)
+}
+
+// mockModeKey is the context key for mock mode signal.
+type mockModeKey struct{}
+
+// WithMockMode returns a context that signals mock mode to all internal managers.
+func WithMockMode(ctx context.Context) context.Context {
+	return context.WithValue(ctx, mockModeKey{}, true)
+}
+
+// IsMockMode checks whether the given context carries the mock mode signal.
+func IsMockMode(ctx context.Context) bool {
+	v, _ := ctx.Value(mockModeKey{}).(bool)
+	return v
+}
+
 // dispatchingVscManager routes calls to the correct backend based on instanceId.
 type dispatchingVscManager struct {
 	eflo VscBackend
@@ -267,8 +288,14 @@ const (
 )
 
 func NewPrimaryVscManagerWithCache(efloClient *efloClient.Client, ecsClient *ecsClient.Client) *PrimaryVscManagerWithCache {
+	return NewPrimaryVscManagerWithBackend(NewVscManager(efloClient, ecsClient))
+}
+
+// NewPrimaryVscManagerWithBackend creates a PrimaryVscManagerWithCache using the given VscManager backend.
+// This allows injecting a mock VscManager for stress testing.
+func NewPrimaryVscManagerWithBackend(vm VscManager) *PrimaryVscManagerWithCache {
 	m := &PrimaryVscManagerWithCache{
-		VscManager: NewVscManager(efloClient, ecsClient),
+		VscManager: vm,
 		retryTimes: defaultVscManagerRetryTimes,
 		cacheTTL:   defaultVscCacheTTL,
 		cond:       sync.NewCond(&sync.Mutex{}),
@@ -354,6 +381,11 @@ func (m *PrimaryVscManagerWithCache) getOrCreatePrimaryFor(instanceId string) (*
 }
 
 func (m *PrimaryVscManagerWithCache) EnsurePrimaryVsc(ctx context.Context, instanceId string, refresh bool) (string, error) {
+	if IsMockMode(ctx) {
+		time.Sleep(mockAPIDelay)
+		klog.V(2).InfoS("mock: EnsurePrimaryVsc completed", "instanceId", instanceId)
+		return FakeVscID(instanceId), nil
+	}
 	m.cond.L.Lock()
 	defer m.cond.L.Unlock()
 
@@ -486,6 +518,11 @@ type cpfsAttachDetacher struct {
 }
 
 func (ad *cpfsAttachDetacher) Attach(ctx context.Context, fsId, vscId string) error {
+	if IsMockMode(ctx) {
+		time.Sleep(mockAPIDelay)
+		klog.V(2).InfoS("mock: Attach completed", "fsId", fsId, "vscId", vscId)
+		return nil
+	}
 	attachInfo, err := ad.describe(fsId, vscId)
 	if err != nil {
 		return err
@@ -523,6 +560,11 @@ func (ad *cpfsAttachDetacher) Attach(ctx context.Context, fsId, vscId string) er
 }
 
 func (ad *cpfsAttachDetacher) Detach(ctx context.Context, fsId, vscId string) error {
+	if IsMockMode(ctx) {
+		time.Sleep(mockAPIDelay)
+		klog.V(2).InfoS("mock: Detach completed", "fsId", fsId, "vscId", vscId)
+		return nil
+	}
 	if err := ad.detach(fsId, vscId); err != nil {
 		sdkErr := new(tea.SDKError)
 		if errors.As(err, &sdkErr) {

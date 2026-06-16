@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	nasclient "github.com/alibabacloud-go/nas-20170626/v4/client"
 	"k8s.io/klog/v2"
@@ -55,6 +56,12 @@ func NewCPFSFileSetManager(client NasClient) CPFSFileSetManager {
 }
 
 func (m *cpfsFileSetManager) CreateFileSet(ctx context.Context, fsID, pvName, fileSystemPath string, countLimit, sizeBytes int64, deleteProtection bool) (string, error) {
+	if IsMockMode(ctx) {
+		time.Sleep(mockAPIDelay)
+		fsetID := fmt.Sprintf("fake-fset-%s", pvName)
+		klog.V(2).InfoS("mock: CreateFileSet completed", "fsID", fsID, "pvName", pvName, "fsetID", fsetID)
+		return fsetID, nil
+	}
 	quota := &nasclient.CreateFilesetRequestQuota{
 		SizeLimit: &sizeBytes,
 	}
@@ -82,6 +89,11 @@ func (m *cpfsFileSetManager) CreateFileSet(ctx context.Context, fsID, pvName, fi
 
 // DeleteFileSet deletes a fileset by fileSystemId and fileSetId
 func (m *cpfsFileSetManager) DeleteFileSet(ctx context.Context, fsID, fileSetID string) error {
+	if IsMockMode(ctx) {
+		time.Sleep(mockAPIDelay)
+		klog.V(2).InfoS("mock: DeleteFileSet completed", "fsID", fsID, "fileSetID", fileSetID)
+		return nil
+	}
 	request := &nasclient.DeleteFilesetRequest{
 		FileSystemId: &fsID,
 		FsetId:       &fileSetID,
@@ -102,6 +114,10 @@ func (m *cpfsFileSetManager) DeleteFileSet(ctx context.Context, fsID, fileSetID 
 
 // DescribeFileSets describes all filesets in a filesystem by fileSystemId
 func (m *cpfsFileSetManager) DescribeFileSets(ctx context.Context, fsID string) ([]*nasclient.DescribeFilesetsResponseBodyEntriesEntrie, error) {
+	if IsMockMode(ctx) {
+		time.Sleep(mockAPIDelay)
+		return nil, ErrFilesetNotFound
+	}
 	var allFileSets []*nasclient.DescribeFilesetsResponseBodyEntriesEntrie
 	var nextToken *string
 
@@ -142,6 +158,12 @@ func (m *cpfsFileSetManager) DescribeFileSets(ctx context.Context, fsID string) 
 
 // DescribeFileset describes a specific fileset by fileSystemId and fileSetId
 func (m *cpfsFileSetManager) DescribeFilesetByFsetID(ctx context.Context, fsID, fileSetID string) (*nasclient.DescribeFilesetsResponseBodyEntriesEntrie, error) {
+	if IsMockMode(ctx) {
+		time.Sleep(mockAPIDelay)
+		// Return a "CREATED" fileset so CreateVolume's poll loop succeeds immediately
+		status := "CREATED"
+		return &nasclient.DescribeFilesetsResponseBodyEntriesEntrie{FsetId: &fileSetID, Status: &status}, nil
+	}
 	request := &nasclient.DescribeFilesetsRequest{
 		FileSystemId: &fsID,
 		Filters: []*nasclient.DescribeFilesetsRequestFilters{
@@ -174,6 +196,10 @@ func (m *cpfsFileSetManager) DescribeFilesetByFsetID(ctx context.Context, fsID, 
 
 // DescribeFilesetByFilePath describes a specific fileset by fileSystemId and filesystemPath
 func (m *cpfsFileSetManager) DescribeFilesetByFilePath(ctx context.Context, fsID, filesystemPath string) (*nasclient.DescribeFilesetsResponseBodyEntriesEntrie, error) {
+	if IsMockMode(ctx) {
+		time.Sleep(mockAPIDelay)
+		return nil, ErrFilesetNotFound
+	}
 	request := &nasclient.DescribeFilesetsRequest{
 		FileSystemId: &fsID,
 		Filters: []*nasclient.DescribeFilesetsRequestFilters{

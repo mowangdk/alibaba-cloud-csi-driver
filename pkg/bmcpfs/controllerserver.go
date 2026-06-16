@@ -234,18 +234,15 @@ func (cs *controllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 		}, nil
 	}
 
+	// FakeVSC stress-test path and real VSC path share the same logic.
+	// Mock mode is signaled via context; managers check IsMockMode(ctx).
 	cpfsID, _ := parseVolumeHandle(req.VolumeId)
 
-	mt := req.VolumeContext[_vscMountTarget]
-	if mt == "" {
-		var err error
-		mt, err = getMountTarget(cs.nasClient, cpfsID, networkTypeVSC)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to get VscMountTarget: %v", err)
-		}
+	if kind == nodeKindFakeVSC {
+		ctx = internal.WithMockMode(ctx)
 	}
 
-	// Get Primary VSC for the node (Lingjun or ECS w/ VSC enabled)
+	// Get Primary VSC for the node
 	vscID, err := cs.vscManager.EnsurePrimaryVsc(ctx, instanceID, false)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -259,7 +256,7 @@ func (cs *controllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 			if req.VolumeContext[_vpcMountTarget] == "" {
 				return nil, status.Errorf(codes.InvalidArgument, "missing %q config in volume context as vsc mountpoint not supported", _vpcMountTarget)
 			}
-			klog.InfoS("ControllerPublishVolume: vsc mountpoint not supported, switch to vpc mountpoint", "nodeId", req.NodeId, "mt", mt)
+			klog.InfoS("ControllerPublishVolume: vsc mountpoint not supported, switch to vpc mountpoint", "nodeId", req.NodeId)
 			return &csi.ControllerPublishVolumeResponse{
 				PublishContext: map[string]string{
 					_networkType:    networkTypeVPC,
@@ -268,6 +265,31 @@ func (cs *controllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 			}, nil
 		}
 		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	// FakeVSC: discover real VPC mount target and return VPC network type
+	if kind == nodeKindFakeVSC {
+		vpcMT, err := getMountTarget(cs.nasClient, cpfsID, networkTypeVPC)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to get VPC mount target for %s: %v", cpfsID, err)
+		}
+		klog.InfoS("ControllerPublishVolume: FakeVSC completed, returning VPC mount target",
+			"nodeId", req.NodeId, "fakeVscId", vscID, "vpcMountTarget", vpcMT)
+		return &csi.ControllerPublishVolumeResponse{
+			PublishContext: map[string]string{
+				_networkType:    networkTypeVPC,
+				_vpcMountTarget: vpcMT,
+			},
+		}, nil
+	}
+
+	// Real VSC: return VSC mount target
+	mt := req.VolumeContext[_vscMountTarget]
+	if mt == "" {
+		mt, err = getMountTarget(cs.nasClient, cpfsID, networkTypeVSC)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to get VscMountTarget: %v", err)
+		}
 	}
 
 	// TODO: if the cached vscid is already deleted, try to recreate a new primary vsc for the node
@@ -284,20 +306,27 @@ func (cs *controllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 
 func (cs *controllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 	instanceID, kind := parseNodeID(req.NodeId)
-	if !kind.supportsVSC() || cs.skipDetach {
+
+	if kind == nodeKindFakeVSC {
+		ctx = internal.WithMockMode(ctx)
+	}
+
+	if (!kind.supportsVSC() && kind != nodeKindFakeVSC) || cs.skipDetach {
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
-	vsc, err := cs.vscManager.GetPrimaryVscOf(instanceID)
+
+	// EnsurePrimaryVsc with refresh=false returns cached VSC ID
+	vscID, err := cs.vscManager.EnsurePrimaryVsc(ctx, instanceID, false)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get vsc error: %v", err)
 	}
-	if vsc == nil {
+	if vscID == "" {
 		klog.InfoS("ControllerUnpublishVolume: skip detaching cpfs from vsc as vsc not found", "node", req.NodeId)
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
 
 	// If `req.VolumeId` is a combination of `cpfsID` and `fsetID`, Detach will trigger an error.
-	err = cs.attachDetacher.Detach(ctx, req.VolumeId, vsc.VscID)
+	err = cs.attachDetacher.Detach(ctx, req.VolumeId, vscID)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

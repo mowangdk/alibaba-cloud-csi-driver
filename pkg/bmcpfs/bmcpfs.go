@@ -41,6 +41,8 @@ const (
 
 	// CommonNodeIDPrefix is the prefix for common node IDs
 	CommonNodeIDPrefix = "common:"
+	// FakeVSCNodeIDPrefix is the prefix for ECS nodes in stress-test mode (fake VSC)
+	FakeVSCNodeIDPrefix = "vsc:fake:"
 	// VSCNodeIDPrefix is the prefix for ecs node IDs which enabled vsc
 	VSCNodeIDPrefix = "vsc:"
 	// LingjunNodeIDPrefix is the prefix for lingjun node IDs
@@ -63,6 +65,8 @@ const (
 	nodeKindUnknown nodeKind = iota
 	// nodeKindCommon represents an ECS node without VSC support; uses VPC mount.
 	nodeKindCommon
+	// nodeKindFakeVSC represents an ECS node faking VSC for stress testing.
+	nodeKindFakeVSC
 	// nodeKindVSC represents an ECS node with VSC enabled.
 	nodeKindVSC
 	// nodeKindLingjun represents a Lingjun (eflo) node.
@@ -82,6 +86,9 @@ func parseNodeID(nodeID string) (instanceID string, kind nodeKind) {
 	case strings.HasPrefix(nodeID, LingjunNodeIDPrefix):
 		instanceID = strings.TrimPrefix(nodeID, LingjunNodeIDPrefix)
 		kind = nodeKindLingjun
+	case strings.HasPrefix(nodeID, FakeVSCNodeIDPrefix):
+		instanceID = strings.TrimPrefix(nodeID, FakeVSCNodeIDPrefix)
+		kind = nodeKindFakeVSC
 	case strings.HasPrefix(nodeID, VSCNodeIDPrefix):
 		instanceID = strings.TrimPrefix(nodeID, VSCNodeIDPrefix)
 		kind = nodeKindVSC

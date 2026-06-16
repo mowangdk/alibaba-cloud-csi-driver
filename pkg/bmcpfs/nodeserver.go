@@ -61,8 +61,8 @@ func newNodeServer(meta *metadata.Metadata) (*nodeServer, error) {
 				}
 				nodeID = VSCNodeIDPrefix + instance
 			} else {
-				klog.InfoS("Not a lingjun instance", "isVsc", isVsc, "err", err, "nodeID", nodeID)
-				nodeID = CommonNodeIDPrefix + os.Getenv(metadata.KUBE_NODE_NAME_ENV)
+				klog.InfoS("Not a lingjun/vsc instance, using FakeVSC for stress testing", "isVsc", isVsc, "err", err)
+				nodeID = FakeVSCNodeIDPrefix + os.Getenv(metadata.KUBE_NODE_NAME_ENV)
 			}
 		} else {
 			return nil, fmt.Errorf("read lingjun_config file: %w", err)
