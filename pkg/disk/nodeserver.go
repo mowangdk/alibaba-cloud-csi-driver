@@ -401,7 +401,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 			return nil, status.Errorf(codes.Internal, "get device name from mount %s: %v", sourcePath, err)
 		}
 	}
-	if realDevice != "tmpfs" {
+	if realDevice != "tmpfs" && realDevice != dataCacheDevicePath(req.VolumeId) {
 		matched := false
 		if realDevice != "" {
 			realMajor, realMinor, err := DefaultDeviceManager.DevTmpFS.DevFor(realDevice)
@@ -630,6 +630,17 @@ func (ns *nodeServer) setupDisk(ctx context.Context, device, targetPath string, 
 		omitfsck = true
 	}
 
+	// Setup DataCache
+	volumeId := req.GetVolumeId()
+	var d dataCache
+	if err := getDataCacheOpts(volumeContext, &d); err != nil {
+		return err
+	}
+	device, err := setupDataCache(logger, defaultCacheIO, &d, device, volumeId)
+	if err != nil {
+		return err
+	}
+
 	// Block volume not need to format
 	if req.GetVolumeCapability().GetBlock() != nil {
 		if err := ns.mounter.EnsureBlock(targetPath); err != nil {
@@ -661,7 +672,6 @@ func (ns *nodeServer) setupDisk(ctx context.Context, device, targetPath string, 
 		mkfsOptions = strings.Split(value, " ")
 	}
 
-	volumeId := req.GetVolumeId()
 	// do format-mount or mount
 	diskMounter := &k8smount.SafeFormatAndMount{Interface: ns.k8smounter, Exec: utilexec.New()}
 	if err := utils.FormatAndMount(diskMounter, device, targetPath, fsType, mkfsOptions, mountOptions, omitfsck); err != nil {
@@ -733,6 +743,10 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 	err := ns.unmountTargetPath(logger, req.StagingTargetPath, req.VolumeId)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	if cacheErr := teardownDataCache(logger, defaultCacheIO, req.VolumeId); cacheErr != nil {
+		return nil, status.Errorf(codes.Aborted, "teardown DataCache: %v", cacheErr)
 	}
 
 	if IsVFNode() {
@@ -977,6 +991,13 @@ func (ns *nodeServer) localExpandVolume(ctx context.Context, req *csi.NodeExpand
 	}
 	logger = logger.WithValues("device", devicePath)
 	ctx = klog.NewContext(ctx, logger)
+
+	err = defaultCacheIO.ResizeDmCache(logger, uint64((requestBytes-1)/512+1), diskID)
+	if err == nil {
+		devicePath = dataCacheDevicePath(diskID)
+	} else if !errors.Is(err, unix.ENXIO) {
+		return nil, status.Errorf(codes.Internal, "resize dm-cache: %v", err)
+	}
 
 	rootPath, index, err := DefaultDeviceManager.GetDeviceRootAndPartitionIndex(devicePath)
 	if err != nil {
@@ -1254,6 +1275,9 @@ func (ns *nodeServer) umountRunDVolumes(logger klog.Logger, volumePath string) (
 
 func (ns *nodeServer) mountRunvVolumes(logger klog.Logger, volumeId, sourcePath, targetPath string) error {
 	logger.V(2).Info("Mount with runv")
+	if err := checkDataCacheForVFIO(defaultCacheIO, volumeId); err != nil {
+		return status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
 	// umount the stage path, which is mounted in Stage (tmpfs)
 	if err := ns.unmountStageTarget(logger, sourcePath); err != nil {
 		return status.Errorf(codes.InvalidArgument, "runv: unmountStageTarget %s: %v", sourcePath, err)
@@ -1294,6 +1318,9 @@ func (ns *nodeServer) mountRunvVolumes(logger klog.Logger, volumeId, sourcePath,
 
 func (ns *nodeServer) mountRunDVolumes(logger klog.Logger, volumeId, pvName, sourcePath, targetPath, fsType, mkfsOptions string, isRawBlock, pvmMode bool, mountFlags []string) (bool, error) {
 	logger.V(2).Info("Mount in RunD csi 3.0/2.0 protocol")
+	if err := checkDataCacheForVFIO(defaultCacheIO, volumeId); err != nil {
+		return true, status.Errorf(codes.FailedPrecondition, "%v", err)
+	}
 	deviceName, err := ns.ad.GetRootBlockDevice(logger, volumeId)
 	if err != nil {
 		logger.V(1).Info("RunD volume device not found", "err", err)
