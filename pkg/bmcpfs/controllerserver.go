@@ -246,7 +246,7 @@ func (cs *controllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	}
 
 	// Get Primary VSC for the node (Lingjun or ECS w/ VSC enabled)
-	vscID, err := cs.vscManager.EnsurePrimaryVsc(ctx, instanceID, false)
+	vscID, err := cs.vscManager.EnsurePrimaryVsc(ctx, instanceID)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -287,7 +287,7 @@ func (cs *controllerServer) ControllerUnpublishVolume(ctx context.Context, req *
 	if !kind.supportsVSC() || cs.skipDetach {
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
-	vsc, err := cs.vscManager.GetPrimaryVscOf(instanceID)
+	vsc, err := cs.vscManager.GetPrimaryVscOf(ctx, instanceID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "get vsc error: %v", err)
 	}

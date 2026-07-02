@@ -8,7 +8,7 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 */
 
-package labeler
+package ttlcache
 
 import (
 	"context"
@@ -235,9 +235,13 @@ func testTTLCacheContextCancelWhileWaitingSync(t *testing.T) {
 }
 
 func TestTTLCacheStructKey(t *testing.T) {
-	c := NewTTLCache[diskTypeCacheKey, []string](10 * time.Second)
+	type structKey struct {
+		instanceType string
+		zoneID       string
+	}
+	c := NewTTLCache[structKey, []string](10 * time.Second)
 
-	val, err := c.Get(t.Context(), diskTypeCacheKey{"ecs.g7.large", "cn-beijing-a"}, func() ([]string, error) {
+	val, err := c.Get(t.Context(), structKey{"ecs.g7.large", "cn-beijing-a"}, func() ([]string, error) {
 		return []string{"cloud_essd", "cloud_ssd"}, nil
 	})
 	require.NoError(t, err)
@@ -245,7 +249,7 @@ func TestTTLCacheStructKey(t *testing.T) {
 
 	// Same key → cached.
 	var calls atomic.Int32
-	val, err = c.Get(t.Context(), diskTypeCacheKey{"ecs.g7.large", "cn-beijing-a"}, func() ([]string, error) {
+	val, err = c.Get(t.Context(), structKey{"ecs.g7.large", "cn-beijing-a"}, func() ([]string, error) {
 		calls.Add(1)
 		return []string{"other"}, nil
 	})
@@ -254,9 +258,70 @@ func TestTTLCacheStructKey(t *testing.T) {
 	assert.Equal(t, 0, int(calls.Load()))
 
 	// Different key → new computation.
-	val, err = c.Get(t.Context(), diskTypeCacheKey{"ecs.g7.xlarge", "cn-beijing-a"}, func() ([]string, error) {
+	val, err = c.Get(t.Context(), structKey{"ecs.g7.xlarge", "cn-beijing-a"}, func() ([]string, error) {
 		return []string{"cloud_essd"}, nil
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"cloud_essd"}, val)
+}
+
+// TestTTLCacheZeroTTLNoCache verifies that a non-positive TTL disables caching:
+// every sequential Get recomputes (the entry is evicted right after compute).
+func TestTTLCacheZeroTTLNoCache(t *testing.T) {
+	c := NewTTLCache[string, int](0)
+
+	var calls atomic.Int32
+	get := func() (int, error) {
+		calls.Add(1)
+		return 42, nil
+	}
+	for range 3 {
+		val, err := c.Get(t.Context(), "key1", get)
+		require.NoError(t, err)
+		assert.Equal(t, 42, val)
+	}
+	assert.Equal(t, 3, int(calls.Load()), "zero TTL must not cache; each Get recomputes")
+}
+
+// TestTTLCacheZeroTTLSingleFlight verifies that even with caching disabled
+// (TTL 0), concurrent callers for the same key share a single in-flight
+// computation.
+func TestTTLCacheZeroTTLSingleFlight(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := NewTTLCache[string, int](0)
+
+		var calls atomic.Int32
+		var wg sync.WaitGroup
+		for range 20 {
+			wg.Go(func() {
+				val, err := c.Get(t.Context(), "key1", func() (int, error) {
+					calls.Add(1)
+					time.Sleep(time.Millisecond) // hold fn open so all callers pile up
+					return 42, nil
+				})
+				assert.NoError(t, err)
+				assert.Equal(t, 42, val)
+			})
+		}
+		wg.Wait()
+
+		assert.Equal(t, 1, int(calls.Load()), "concurrent callers must dedup even with zero TTL")
+	})
+}
+
+// TestTTLCacheStore verifies that Store populates the cache directly, so a
+// subsequent Get returns the value without invoking fn.
+func TestTTLCacheStore(t *testing.T) {
+	c := NewTTLCache[string, int](10 * time.Second)
+
+	c.Store("key1", 42)
+
+	var calls atomic.Int32
+	val, err := c.Get(t.Context(), "key1", func() (int, error) {
+		calls.Add(1)
+		return 99, nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 42, val)
+	assert.Equal(t, 0, int(calls.Load()), "stored value must be served without recomputing")
 }

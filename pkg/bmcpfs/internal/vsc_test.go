@@ -22,13 +22,14 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/alibabacloud-go/tea/tea"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/utils/ttlcache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/time/rate"
-	"k8s.io/client-go/util/workqueue"
+	"k8s.io/utils/clock"
 )
 
 func TestAttachNotSupportedError_Error(t *testing.T) {
@@ -106,20 +107,6 @@ func TestVscDialectValues(t *testing.T) {
 	assert.Equal(t, "In_use", ecsVscDialect.StatusNormal)
 }
 
-func TestVscWithErr_IsExpired(t *testing.T) {
-	ttl := 100 * time.Millisecond
-
-	fresh := vscWithErr{cachedAt: time.Now()}
-	assert.False(t, fresh.isExpired(ttl), "freshly cached value should not be expired")
-
-	stale := vscWithErr{cachedAt: time.Now().Add(-2 * ttl)}
-	assert.True(t, stale.isExpired(ttl), "value older than ttl should be expired")
-
-	// Zero cachedAt means "never cached" -> always expired against any positive ttl.
-	never := vscWithErr{}
-	assert.True(t, never.isExpired(ttl))
-}
-
 func TestDefaultVscCacheTTL(t *testing.T) {
 	// Ensure the documented 5-minute default isn't accidentally lowered.
 	assert.GreaterOrEqual(t, defaultVscCacheTTL, 3*time.Minute)
@@ -141,6 +128,12 @@ type fakeVscManager struct {
 	getErr    error
 	getOneErr error
 
+	// notReadyGetVscCalls: the first N GetVsc calls report notReadyStatus instead
+	// of the stored status, to simulate a freshly created VSC settling. When 0,
+	// GetVsc always returns the stored status.
+	notReadyGetVscCalls int
+	notReadyStatus      string
+
 	// counters
 	CreateCalls int
 	GetCalls    int
@@ -154,7 +147,12 @@ func newFakeVscManager() *fakeVscManager {
 	}
 }
 
-func (f *fakeVscManager) CreatePrimaryVscFor(instanceId string) (string, error) {
+func (f *fakeVscManager) CreatePrimaryVscFor(ctx context.Context, instanceId string) (string, error) {
+	// Yield before recording the VSC so that, if single-flight ever regresses,
+	// concurrent callers overlap here instead of running check+create atomically
+	// (TestPrimaryVscCache_EnsurePrimaryVsc_ConcurrentCreatesOnce relies on this).
+	// Negligible under real time; auto-advanced under synctest.
+	time.Sleep(time.Microsecond)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.CreateCalls++
@@ -177,7 +175,7 @@ func (f *fakeVscManager) CreatePrimaryVscFor(instanceId string) (string, error) 
 	return vscId, nil
 }
 
-func (f *fakeVscManager) GetPrimaryVscOf(instanceId string) (*Vsc, error) {
+func (f *fakeVscManager) GetPrimaryVscOf(ctx context.Context, instanceId string) (*Vsc, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.GetCalls++
@@ -192,7 +190,7 @@ func (f *fakeVscManager) GetPrimaryVscOf(instanceId string) (*Vsc, error) {
 	return &cp, nil
 }
 
-func (f *fakeVscManager) GetVsc(vscId, instanceId string) (*Vsc, error) {
+func (f *fakeVscManager) GetVsc(ctx context.Context, vscId, instanceId string) (*Vsc, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.GetOneCalls++
@@ -204,90 +202,54 @@ func (f *fakeVscManager) GetVsc(vscId, instanceId string) (*Vsc, error) {
 		return nil, nil
 	}
 	cp := *v
+	if f.notReadyGetVscCalls > 0 && f.GetOneCalls <= f.notReadyGetVscCalls {
+		cp.Status = f.notReadyStatus
+	}
 	return &cp, nil
 }
 
 // newTestPrimaryVscManagerWithCache builds a PrimaryVscManagerWithCache that
-// uses the supplied fake backend, with a small worker count for fast tests.
+// uses the supplied fake backend, with a tiny poll interval for fast tests.
 func newTestPrimaryVscManagerWithCache(t *testing.T, backend VscManager, ttl time.Duration) *PrimaryVscManagerWithCache {
 	t.Helper()
-	m := &PrimaryVscManagerWithCache{
-		VscManager: backend,
-		retryTimes: 1,
-		cacheTTL:   ttl,
-		cond:       sync.NewCond(&sync.Mutex{}),
-		cache:      make(map[string]vscWithErr),
-		queue: workqueue.NewTypedRateLimitingQueue(
-			workqueue.NewTypedMaxOfRateLimiter(
-				workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Millisecond, 100*time.Millisecond),
-				&workqueue.TypedBucketRateLimiter[string]{Limiter: rate.NewLimiter(rate.Limit(100), 100)},
-			),
-		),
+	return &PrimaryVscManagerWithCache{
+		VscManager:   backend,
+		vscCache:     ttlcache.NewTTLCache[string, *Vsc](ttl),
+		createVsc:    ttlcache.NewTTLCache[string, *Vsc](0),
+		clk:          clock.RealClock{},
+		pollInterval: time.Millisecond,
+		pollAttempts: defaultVscPollAttempts,
 	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for m.handleNext() {
-		}
-	}()
-	t.Cleanup(func() {
-		m.queue.ShutDown()
-		<-done
-	})
-	return m
 }
 
 func TestPrimaryVscCache_EnsurePrimaryVsc_CreatesAndCaches(t *testing.T) {
 	fake := newFakeVscManager()
 	m := newTestPrimaryVscManagerWithCache(t, fake, time.Minute)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	vscId, err := m.EnsurePrimaryVsc(ctx, "i-ecs-1", false)
+	vscId, err := m.EnsurePrimaryVsc(t.Context(), "i-ecs-1")
 	require.NoError(t, err)
 	assert.Equal(t, "vsc-i-ecs-1", vscId)
 	assert.Equal(t, 1, fake.CreateCalls)
 
 	// Second call within TTL should be served from cache: no extra backend hits.
-	vscId2, err := m.EnsurePrimaryVsc(ctx, "i-ecs-1", false)
+	vscId2, err := m.EnsurePrimaryVsc(t.Context(), "i-ecs-1")
 	require.NoError(t, err)
 	assert.Equal(t, "vsc-i-ecs-1", vscId2)
 	assert.Equal(t, 1, fake.CreateCalls, "cached EnsurePrimaryVsc must not call backend")
-}
-
-func TestPrimaryVscCache_EnsurePrimaryVsc_RefreshBypassesCache(t *testing.T) {
-	fake := newFakeVscManager()
-	m := newTestPrimaryVscManagerWithCache(t, fake, time.Hour)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_, err := m.EnsurePrimaryVsc(ctx, "i-ecs-1", false)
-	require.NoError(t, err)
-	prevGet := fake.GetCalls
-
-	// refresh=true must bypass the cache and hit the backend again.
-	_, err = m.EnsurePrimaryVsc(ctx, "i-ecs-1", true)
-	require.NoError(t, err)
-	assert.Greater(t, fake.GetCalls, prevGet, "refresh=true must trigger backend lookup")
 }
 
 func TestPrimaryVscCache_EnsurePrimaryVsc_ExpiryRefreshes(t *testing.T) {
 	fake := newFakeVscManager()
 	m := newTestPrimaryVscManagerWithCache(t, fake, 10*time.Millisecond)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_, err := m.EnsurePrimaryVsc(ctx, "i-ecs-1", false)
+	_, err := m.EnsurePrimaryVsc(t.Context(), "i-ecs-1")
 	require.NoError(t, err)
 	prevGet := fake.GetCalls
 
 	// Wait for the entry to expire.
 	time.Sleep(50 * time.Millisecond)
 
-	_, err = m.EnsurePrimaryVsc(ctx, "i-ecs-1", false)
+	_, err = m.EnsurePrimaryVsc(t.Context(), "i-ecs-1")
 	require.NoError(t, err)
 	assert.Greater(t, fake.GetCalls, prevGet, "expired entry must trigger backend lookup")
 }
@@ -297,12 +259,72 @@ func TestPrimaryVscCache_EnsurePrimaryVsc_BackendErrorPropagated(t *testing.T) {
 	fake.getErr = errors.New("backend down")
 	m := newTestPrimaryVscManagerWithCache(t, fake, time.Minute)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_, err := m.EnsurePrimaryVsc(ctx, "i-ecs-1", false)
+	_, err := m.EnsurePrimaryVsc(t.Context(), "i-ecs-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "backend down")
+}
+
+// TestPrimaryVscCache_EnsurePrimaryVsc_PollsUntilReady verifies that a freshly
+// created VSC reporting a transient status is polled until it settles.
+func TestPrimaryVscCache_EnsurePrimaryVsc_PollsUntilReady(t *testing.T) {
+	fake := newFakeVscManager()
+	// First two GetVsc calls report a not-yet-usable status, then it settles.
+	fake.notReadyGetVscCalls = 2
+	fake.notReadyStatus = "Attaching"
+	m := newTestPrimaryVscManagerWithCache(t, fake, time.Minute)
+
+	vscId, err := m.EnsurePrimaryVsc(t.Context(), "i-ecs-1")
+	require.NoError(t, err)
+	assert.Equal(t, "vsc-i-ecs-1", vscId)
+	// 3 polls: the first two report the transient status, the third returns Normal.
+	assert.Equal(t, 3, fake.GetOneCalls)
+}
+
+// TestPrimaryVscCache_EnsurePrimaryVsc_PollExhaustedReturnsError verifies that a
+// VSC whose status never settles fails after pollAttempts.
+func TestPrimaryVscCache_EnsurePrimaryVsc_PollExhaustedReturnsError(t *testing.T) {
+	fake := newFakeVscManager()
+	// Never settles.
+	fake.notReadyGetVscCalls = 1000
+	fake.notReadyStatus = "Attaching"
+	m := newTestPrimaryVscManagerWithCache(t, fake, time.Minute)
+
+	_, err := m.EnsurePrimaryVsc(t.Context(), "i-ecs-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpected vsc status: Attaching")
+	// pollAttempts polls, all reporting the transient status, before giving up.
+	assert.Equal(t, m.pollAttempts, fake.GetOneCalls)
+}
+
+// TestPrimaryVscCache_EnsurePrimaryVsc_ConcurrentCreatesOnce verifies the core
+// invariant: concurrent EnsurePrimaryVsc calls for a not-yet-existing instance
+// create exactly one VSC. createVsc serializes the callers and check-before-create
+// makes the followers reuse the leader's VSC instead of creating their own.
+func TestPrimaryVscCache_EnsurePrimaryVsc_ConcurrentCreatesOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fake := newFakeVscManager()
+		m := newTestPrimaryVscManagerWithCache(t, fake, time.Minute)
+		// The fake's create sleeps before recording the VSC (see CreatePrimaryVscFor),
+		// so all callers reach the create window; single-flight must still collapse
+		// them to one. Under synctest the clock advances only once all are parked.
+
+		const n = 5
+		var wg sync.WaitGroup
+		ids := make([]string, n)
+		errs := make([]error, n)
+		for i := range n {
+			wg.Go(func() {
+				ids[i], errs[i] = m.EnsurePrimaryVsc(t.Context(), "i-ecs-1")
+			})
+		}
+		wg.Wait()
+
+		for i := range n {
+			require.NoError(t, errs[i])
+			assert.Equal(t, "vsc-i-ecs-1", ids[i])
+		}
+		assert.Equal(t, 1, fake.CreateCalls, "concurrent EnsurePrimaryVsc must create exactly one VSC")
+	})
 }
 
 func TestPrimaryVscCache_GetPrimaryVscOf_ReadThroughCaches(t *testing.T) {
@@ -316,14 +338,14 @@ func TestPrimaryVscCache_GetPrimaryVscOf_ReadThroughCaches(t *testing.T) {
 	}
 	m := newTestPrimaryVscManagerWithCache(t, fake, time.Minute)
 
-	vsc, err := m.GetPrimaryVscOf("e01-cn-xyz")
+	vsc, err := m.GetPrimaryVscOf(t.Context(), "e01-cn-xyz")
 	require.NoError(t, err)
 	require.NotNil(t, vsc)
 	assert.Equal(t, "vsc-existing", vsc.VscID)
 
 	prev := fake.GetCalls
 	// Second call should be served from the cache.
-	vsc, err = m.GetPrimaryVscOf("e01-cn-xyz")
+	vsc, err = m.GetPrimaryVscOf(t.Context(), "e01-cn-xyz")
 	require.NoError(t, err)
 	require.NotNil(t, vsc)
 	assert.Equal(t, prev, fake.GetCalls, "cached GetPrimaryVscOf must not call backend")
@@ -333,14 +355,14 @@ func TestPrimaryVscCache_GetPrimaryVscOf_NotFoundNotCached(t *testing.T) {
 	fake := newFakeVscManager()
 	m := newTestPrimaryVscManagerWithCache(t, fake, time.Minute)
 
-	vsc, err := m.GetPrimaryVscOf("e01-missing")
+	vsc, err := m.GetPrimaryVscOf(t.Context(), "e01-missing")
 	require.NoError(t, err)
 	assert.Nil(t, vsc)
 	assert.Equal(t, 1, fake.GetCalls)
 
 	// A subsequent call must hit the backend again because nil results are not
 	// cached (the absence might be transient).
-	vsc, err = m.GetPrimaryVscOf("e01-missing")
+	vsc, err = m.GetPrimaryVscOf(t.Context(), "e01-missing")
 	require.NoError(t, err)
 	assert.Nil(t, vsc)
 	assert.Equal(t, 2, fake.GetCalls)
@@ -356,13 +378,13 @@ func TestPrimaryVscCache_GetPrimaryVscOf_ExpiryRefetches(t *testing.T) {
 	}
 	m := newTestPrimaryVscManagerWithCache(t, fake, 10*time.Millisecond)
 
-	_, err := m.GetPrimaryVscOf("e01-cn-xyz")
+	_, err := m.GetPrimaryVscOf(t.Context(), "e01-cn-xyz")
 	require.NoError(t, err)
 	prev := fake.GetCalls
 
 	time.Sleep(50 * time.Millisecond)
 
-	_, err = m.GetPrimaryVscOf("e01-cn-xyz")
+	_, err = m.GetPrimaryVscOf(t.Context(), "e01-cn-xyz")
 	require.NoError(t, err)
 	assert.Greater(t, fake.GetCalls, prev, "expired entry must refetch")
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud/metadata"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/disk"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/utils/ttlcache"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -171,9 +172,9 @@ func runOnce(ctx context.Context, client kubernetes.Interface, ecsClient cloud.E
 		RegionID:          regionID,
 		NodeLister:        nodeInformer.Lister(),
 		Queue:             queue,
-		instanceTypeCache: NewTTLCache[string, int32](defaultInstanceTypeTTL),
-		nodeTypeCache:     NewTTLCache[string, int32](defaultInstanceTypeTTL),
-		diskTypesCache:    NewTTLCache[diskTypeCacheKey, []string](defaultInstanceTypeTTL),
+		instanceTypeCache: ttlcache.NewTTLCache[string, int32](defaultInstanceTypeTTL),
+		nodeTypeCache:     ttlcache.NewTTLCache[string, int32](defaultInstanceTypeTTL),
+		diskTypesCache:    ttlcache.NewTTLCache[diskTypeCacheKey, []string](defaultInstanceTypeTTL),
 	}
 
 	_, err := nodeInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{

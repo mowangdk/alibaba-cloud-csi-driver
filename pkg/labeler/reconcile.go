@@ -19,6 +19,7 @@ import (
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud/metadata"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/disk"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/utils/ttlcache"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,9 +39,9 @@ type Reconciler struct {
 	NodeLister corev1listers.NodeLister
 	Queue      workqueue.TypedRateLimitingInterface[string]
 
-	instanceTypeCache *TTLCache[string, int32]
-	nodeTypeCache     *TTLCache[string, int32]
-	diskTypesCache    *TTLCache[diskTypeCacheKey, []string]
+	instanceTypeCache *ttlcache.TTLCache[string, int32]
+	nodeTypeCache     *ttlcache.TTLCache[string, int32]
+	diskTypesCache    *ttlcache.TTLCache[diskTypeCacheKey, []string]
 }
 
 type diskTypeCacheKey struct {
