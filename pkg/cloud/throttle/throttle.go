@@ -2,15 +2,93 @@ package throttle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/alibabacloud-go/tea/tea"
 	alierrors "github.com/aliyun/alibaba-cloud-sdk-go/sdk/errors"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 )
+
+// Class categorizes an error returned by an OpenAPI call for throttling purposes.
+type Class int
+
+const (
+	// ClassUnknown means the error is not a recognized cloud API error, so we
+	// cannot tell whether we are being throttled. Throttle state is left untouched.
+	ClassUnknown Class = iota
+	// ClassOK means the call was a recognized outcome that is not throttling
+	// (success or a non-throttling cloud error). Any active throttling is cleared.
+	ClassOK
+	// ClassThrottling means the cloud responded with a throttling error, so we
+	// should back off and retry.
+	ClassThrottling
+)
+
+// Classifier maps an error (which may be nil) to a Class plus a best-effort
+// request ID for logging (empty when unavailable). It lets the Throttler work
+// with different Alibaba Cloud SDKs whose error types are incompatible.
+type Classifier func(error) (Class, string)
+
+// V1Classifier classifies errors from the old SDK
+// (github.com/aliyun/alibaba-cloud-sdk-go), whose errors are *alierrors.ServerError.
+func V1Classifier(err error) (Class, string) {
+	if err == nil {
+		return ClassOK, ""
+	}
+	alierr, ok := errors.AsType[*alierrors.ServerError](err)
+	if !ok {
+		return ClassUnknown, ""
+	}
+	if alierr.ErrorCode() == "Throttling" {
+		return ClassThrottling, alierr.RequestId()
+	}
+	return ClassOK, alierr.RequestId()
+}
+
+// V2Classifier classifies errors from the new tea SDK
+// (github.com/alibabacloud-go/*), whose errors are *tea.SDKError. Throttling
+// codes take several forms (Throttling, Throttling.User, Throttling.Api), so we
+// match on the "Throttling" prefix.
+func V2Classifier(err error) (Class, string) {
+	if err == nil {
+		return ClassOK, ""
+	}
+	sdkErr, ok := errors.AsType[*tea.SDKError](err)
+	if !ok {
+		return ClassUnknown, ""
+	}
+	requestID := sdkErrorRequestID(sdkErr)
+	if strings.HasPrefix(tea.StringValue(sdkErr.Code), "Throttling") {
+		return ClassThrottling, requestID
+	}
+	return ClassOK, requestID
+}
+
+// sdkErrorRequestID extracts the request ID from a tea SDKError. The tea SDK
+// stashes it inside the JSON-encoded Data field rather than a typed accessor
+// (see pkg/cloud/wrap.transformV2ErrorForLog).
+func sdkErrorRequestID(e *tea.SDKError) string {
+	if e.Data == nil {
+		return ""
+	}
+	data := *e.Data
+	if data == "" || data[0] != '{' { // only attempt to parse a JSON object
+		return ""
+	}
+	var parsed struct {
+		RequestId string
+	}
+	if json.Unmarshal([]byte(data), &parsed) != nil {
+		return ""
+	}
+	return parsed.RequestId
+}
 
 type throttlingError struct {
 	err error
@@ -35,16 +113,18 @@ type Throttler struct {
 	initDelay time.Duration
 	maxDelay  time.Duration
 
-	clk clock.Clock
+	clk      clock.Clock
+	classify Classifier
 
 	current atomic.Pointer[throttlingContext]
 }
 
-func NewThrottler(clk clock.Clock, initDelay, maxDelay time.Duration) *Throttler {
+func NewThrottler(clk clock.Clock, initDelay, maxDelay time.Duration, classify Classifier) *Throttler {
 	return &Throttler{
 		initDelay: initDelay,
 		maxDelay:  maxDelay,
 		clk:       clk,
+		classify:  classify,
 	}
 }
 
@@ -88,17 +168,16 @@ func (t *Throttler) Throttle(ctx context.Context, f func() error) error {
 
 		err := f()
 
-		var alierr *alierrors.ServerError
-		if err != nil && !errors.As(err, &alierr) {
+		class, requestID := t.classify(err)
+		switch class {
+		case ClassUnknown:
 			// We are not sure what's wrong, don't change state.
 			if tCtx != nil {
 				// Initiate the next probe immediately.
 				tCtx.probing <- struct{}{}
 			}
 			return err
-		}
-
-		if err == nil || alierr.ErrorCode() != "Throttling" {
+		case ClassOK:
 			if tCtx != nil {
 				logger.V(1).Info("OpenAPI throttling ended")
 				close(tCtx.probing)
@@ -116,9 +195,9 @@ func (t *Throttler) Throttle(ctx context.Context, f func() error) error {
 			}
 			tCtx.probing <- struct{}{}
 			if t.current.CompareAndSwap(nil, tCtx) {
-				logger.V(1).Info("OpenAPI throttling detected", "requestID", alierr.RequestId())
+				logger.V(1).Info("OpenAPI throttling detected", "requestID", requestID)
 			} else {
-				logger.V(3).Info("already throttling", "requestID", alierr.RequestId())
+				logger.V(3).Info("already throttling", "requestID", requestID)
 			}
 		} else {
 			tCtx.lastThrottling = t.clk.Now()
@@ -127,7 +206,7 @@ func (t *Throttler) Throttle(ctx context.Context, f func() error) error {
 				tCtx.retryDelay = t.maxDelay
 			}
 			tCtx.probing <- struct{}{}
-			logger.V(2).Info("still throttling", "retry", tCtx.retryDelay, "requestID", alierr.RequestId())
+			logger.V(2).Info("still throttling", "retry", tCtx.retryDelay, "requestID", requestID)
 		}
 	}
 }

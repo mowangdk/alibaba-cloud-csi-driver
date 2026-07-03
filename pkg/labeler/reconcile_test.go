@@ -9,6 +9,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/disk"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/utils/ttlcache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
@@ -162,9 +163,9 @@ func newTestFixture(t *testing.T, nodes ...*v1.Node) *testFixture {
 			RegionID:          "cn-test",
 			NodeLister:        nodeInformer.Lister(),
 			Queue:             q,
-			instanceTypeCache: NewTTLCache[string, int32](defaultInstanceTypeTTL),
-			nodeTypeCache:     NewTTLCache[string, int32](defaultInstanceTypeTTL),
-			diskTypesCache:    NewTTLCache[diskTypeCacheKey, []string](defaultInstanceTypeTTL),
+			instanceTypeCache: ttlcache.NewTTLCache[string, int32](defaultInstanceTypeTTL),
+			nodeTypeCache:     ttlcache.NewTTLCache[string, int32](defaultInstanceTypeTTL),
+			diskTypesCache:    ttlcache.NewTTLCache[diskTypeCacheKey, []string](defaultInstanceTypeTTL),
 		},
 		client: client,
 		ecs:    ecsMock,

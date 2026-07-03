@@ -8,6 +8,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/alibabacloud-go/tea/tea"
 	alierrors "github.com/aliyun/alibaba-cloud-sdk-go/sdk/errors"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/klog/v2"
@@ -17,6 +18,51 @@ import (
 )
 
 var ErrThrottling error = alierrors.NewServerError(400, `{"Code": "Throttling"}`, "")
+
+func TestV1Classifier(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		want      Class
+		wantReqID string
+	}{
+		{name: "nil", err: nil, want: ClassOK},
+		{name: "throttling", err: alierrors.NewServerError(400, `{"Code": "Throttling", "RequestId": "req-123"}`, ""), want: ClassThrottling, wantReqID: "req-123"},
+		{name: "other server error", err: alierrors.NewServerError(400, `{"Code": "Test", "RequestId": "req-456"}`, ""), want: ClassOK, wantReqID: "req-456"},
+		{name: "unknown error", err: errors.New("boom"), want: ClassUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			class, reqID := V1Classifier(tt.err)
+			assert.Equal(t, tt.want, class)
+			assert.Equal(t, tt.wantReqID, reqID)
+		})
+	}
+}
+
+func TestV2Classifier(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		want      Class
+		wantReqID string
+	}{
+		{name: "nil", err: nil, want: ClassOK},
+		{name: "throttling", err: &tea.SDKError{Code: tea.String("Throttling"), Data: tea.String(`{"RequestId":"req-123"}`)}, want: ClassThrottling, wantReqID: "req-123"},
+		{name: "throttling user prefix", err: &tea.SDKError{Code: tea.String("Throttling.User")}, want: ClassThrottling},
+		{name: "throttling api prefix", err: &tea.SDKError{Code: tea.String("Throttling.Api")}, want: ClassThrottling},
+		{name: "other sdk error", err: &tea.SDKError{Code: tea.String("InvalidParameter"), Data: tea.String(`{"RequestId":"req-789"}`)}, want: ClassOK, wantReqID: "req-789"},
+		{name: "non-json data", err: &tea.SDKError{Code: tea.String("Throttling"), Data: tea.String("not json")}, want: ClassThrottling},
+		{name: "unknown error", err: errors.New("boom"), want: ClassUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			class, reqID := V2Classifier(tt.err)
+			assert.Equal(t, tt.want, class)
+			assert.Equal(t, tt.wantReqID, reqID)
+		})
+	}
+}
 
 func TestThrottlingStress(t *testing.T) { synctest.Test(t, testThrottlingStressSync) }
 func testThrottlingStressSync(t *testing.T) {
@@ -35,7 +81,7 @@ func testThrottlingStressSync(t *testing.T) {
 			return nil
 		}
 	}
-	throttler := NewThrottler(clock.RealClock{}, 1*time.Second, 8*time.Second)
+	throttler := NewThrottler(clock.RealClock{}, 1*time.Second, 8*time.Second, V1Classifier)
 
 	for i := range reqCount {
 		go func() {
@@ -94,7 +140,7 @@ func testThrottlingStressSync(t *testing.T) {
 func TestThrottleErrorPassThrough(t *testing.T) {
 	_, ctx := ktesting.NewTestContext(t)
 	clk := testclock.NewFakeClock(time.Now())
-	throttler := NewThrottler(clk, time.Second*1, time.Second*10)
+	throttler := NewThrottler(clk, time.Second*1, time.Second*10, V1Classifier)
 
 	testErr := func(t *testing.T, expectedErr error) {
 		f := func() error {
@@ -114,7 +160,7 @@ func TestThrottleErrorPassThrough(t *testing.T) {
 
 func TestCancelAtDelay(t *testing.T) { synctest.Test(t, testCancelAtDelaySync) }
 func testCancelAtDelaySync(t *testing.T) {
-	throttler := NewThrottler(clock.RealClock{}, time.Second*1, time.Second*10)
+	throttler := NewThrottler(clock.RealClock{}, time.Second*1, time.Second*10, V1Classifier)
 
 	_, ctx := ktesting.NewTestContext(t)
 	ctxToCancel, cancel := context.WithCancel(ctx)
@@ -138,7 +184,7 @@ func testCancelAtDelaySync(t *testing.T) {
 func TestUnknownErrorOnProbing(t *testing.T) { synctest.Test(t, testUnknownErrorOnProbingSync) }
 func testUnknownErrorOnProbingSync(t *testing.T) {
 	_, ctx := ktesting.NewTestContext(t)
-	throttler := NewThrottler(clock.RealClock{}, time.Second*1, time.Second*10)
+	throttler := NewThrottler(clock.RealClock{}, time.Second*1, time.Second*10, V1Classifier)
 
 	errUnknown := errors.New("unknown error")
 	var errRet atomic.Pointer[error]

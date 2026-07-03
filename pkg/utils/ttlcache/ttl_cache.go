@@ -8,7 +8,8 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 */
 
-package labeler
+// Package ttlcache provides small, reusable in-memory caching primitives.
+package ttlcache
 
 import (
 	"context"
@@ -23,6 +24,10 @@ import (
 // are shared among concurrent callers but not cached (immediately
 // evicted so the next call retries). Expired entries are lazily
 // evicted on Get.
+//
+// A non-positive TTL turns the cache into a pure single-flight: nothing
+// is retained across calls (the entry is evicted right after computing),
+// but concurrent callers still share one in-flight computation.
 type TTLCache[K comparable, V any] struct {
 	m   sync.Map // map[K]*cacheEntry[V]
 	ttl time.Duration
@@ -67,16 +72,22 @@ func (c *TTLCache[K, V]) Get(ctx context.Context, key K, fn func() (V, error)) (
 		entry := existing.(*cacheEntry[V])
 		select {
 		case <-entry.done:
-			if entry.err != nil {
-				// Error shared with concurrent callers; entry already removed by compute.
+			// Entry was already resolved when we found it: honor the TTL, so an
+			// expired entry (or any entry in a non-positive-TTL cache) refreshes.
+			if now.Before(entry.expires) {
 				return entry.value, entry.err
 			}
-			if now.Before(entry.expires) {
-				return entry.value, nil
-			}
 			// Expired; fall through to CAS replacement.
-		case <-ctx.Done():
-			return zero, ctx.Err()
+		default:
+			// Computation is still in flight; wait for it and share its result
+			// regardless of TTL — we are a genuine single-flight follower, not a
+			// caller that stumbled onto a stale entry.
+			select {
+			case <-entry.done:
+				return entry.value, entry.err
+			case <-ctx.Done():
+				return zero, ctx.Err()
+			}
 		}
 
 		// Expired resolved entry: try CAS to replace with a new pending entry.
@@ -96,9 +107,23 @@ func (c *TTLCache[K, V]) compute(key K, pending *cacheEntry[V], fn func() (V, er
 		pending.expires = now.Add(c.ttl)
 	}
 	close(pending.done)
-	if err != nil {
-		// Remove failed entry so future callers can retry.
+	if err != nil || c.ttl <= 0 {
+		// Don't retain the result: errors must not be cached, and a non-positive
+		// TTL means single-flight only. Concurrent followers already have it.
 		c.m.CompareAndDelete(key, pending)
 	}
 	return value, err
+}
+
+// Store puts value into the cache directly, without running fn, replacing any
+// existing entry and (re)starting its TTL. Use it to populate the cache from a
+// value obtained elsewhere (e.g. a write-through after creating the resource).
+func (c *TTLCache[K, V]) Store(key K, value V) {
+	entry := &cacheEntry[V]{
+		value:   value,
+		expires: time.Now().Add(c.ttl),
+		done:    make(chan struct{}),
+	}
+	close(entry.done)
+	c.m.Store(key, entry)
 }
