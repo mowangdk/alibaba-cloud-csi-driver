@@ -267,24 +267,31 @@ func checkSystemNasConfig() error {
 
 // ParseMountFlags parse mountOptions.
 // Input must be pre-split (each element is a single mount option).
-func ParseMountFlags(mntOptions []string) (string, []string) {
-	var vers string
-	var otherOptions []string
+func ParseMountFlags(mntOptions []string) (vers, akID, akSecret string, otherOptions []string) {
 	for _, option := range mntOptions {
 		if option == "" {
 			continue
 		}
 		key, value, found := strings.Cut(option, "=")
-		if found && key == "vers" {
+		if !found {
+			otherOptions = append(otherOptions, option)
+			continue
+		}
+		switch key {
+		case "vers":
 			vers = value
-		} else {
+		case "access_key_id":
+			akID = value
+		case "access_key_secret":
+			akSecret = value
+		default:
 			otherOptions = append(otherOptions, option)
 		}
 	}
 	if vers == "3.0" {
 		vers = "3"
 	}
-	return vers, otherOptions
+	return
 }
 
 func addTLSMountOptions(baseOptions []string) []string {

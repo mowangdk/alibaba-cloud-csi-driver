@@ -19,38 +19,50 @@ limitations under the License.
 package nas
 
 import (
+	"context"
 	"testing"
 
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter"
 	"github.com/stretchr/testify/assert"
+	mountutils "k8s.io/mount-utils"
 )
 
 func TestParseMountFlags(t *testing.T) {
 	tests := []struct {
-		name        string
-		mntOptions  []string
-		wantVers    string
-		wantOptions []string
+		name         string
+		mntOptions   []string
+		wantVers     string
+		wantAkID     string
+		wantAkSecret string
+		wantOptions  []string
 	}{
 		{
 			"vers=3.0 normalized to 3",
 			[]string{"mnt=/test", "vers=3.0"},
-			"3", []string{"mnt=/test"},
+			"3", "", "", []string{"mnt=/test"},
 		},
 		{
 			"vers=4.1 not normalized",
 			[]string{"mnt=/test", "vers=4.1"},
-			"4.1", []string{"mnt=/test"},
+			"4.1", "", "", []string{"mnt=/test"},
 		},
 		{
 			"no vers",
 			[]string{"mnt=/test", "a=b", "c=d"},
-			"", []string{"mnt=/test", "a=b", "c=d"},
+			"", "", "", []string{"mnt=/test", "a=b", "c=d"},
+		},
+		{
+			"access_key_id and access_key_secret extracted",
+			[]string{"mnt=/test", "access_key_id=myak", "access_key_secret=mysk", "vers=3"},
+			"3", "myak", "mysk", []string{"mnt=/test"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotVers, gotOptions := ParseMountFlags(tt.mntOptions)
+			gotVers, gotAkID, gotAkSecret, gotOptions := ParseMountFlags(tt.mntOptions)
 			assert.Equal(t, tt.wantVers, gotVers)
+			assert.Equal(t, tt.wantAkID, gotAkID)
+			assert.Equal(t, tt.wantAkSecret, gotAkSecret)
 			assert.Equal(t, tt.wantOptions, gotOptions)
 		})
 	}
@@ -213,4 +225,35 @@ func TestIsSubDir(t *testing.T) {
 			assert.Equal(t, tt.expectedRelPath, actualRelpath)
 		})
 	}
+}
+
+type recordingMounter struct {
+	mountutils.FakeMounter
+	lastOp *mounter.MountOperation
+}
+
+func (m *recordingMounter) ExtendedMount(_ context.Context, op *mounter.MountOperation) error {
+	m.lastOp = op
+	return nil
+}
+
+func TestDoMount_AccesspointWithAkSkFromMountOptions(t *testing.T) {
+	m := &recordingMounter{}
+	opt := &Options{
+		Accesspoint:   "ap-xxx.nas.aliyuncs.com",
+		Path:          "/",
+		Vers:          "3",
+		Options:       []string{"nolock"},
+		MountProtocol: MountProtocolNFS,
+		AkID:          "test-ak-id",
+		AkSecret:      "test-ak-secret",
+	}
+	err := doMount(m, opt, "/mnt/target", "vol-123", "pod-uid", false)
+	assert.NoError(t, err)
+
+	assert.Equal(t, "ap-xxx.nas.aliyuncs.com:/", m.lastOp.Source)
+	assert.Equal(t, "alinas", m.lastOp.FsType)
+	assert.Equal(t, "test-ak-id", m.lastOp.Secrets[akIDKey])
+	assert.Equal(t, "test-ak-secret", m.lastOp.Secrets[akSecretKey])
+	assert.Contains(t, m.lastOp.Options, "tls")
 }
