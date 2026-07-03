@@ -291,7 +291,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		for _, o := range req.VolumeCapability.GetMount().MountFlags {
 			mntOptions = append(mntOptions, mounterutils.SplitMountOptions(o)...)
 		}
-		parseVers, parseOptions := ParseMountFlags(mntOptions)
+		parseVers, akID, akSecret, parseOptions := ParseMountFlags(mntOptions)
 		if parseVers != "" {
 			if opt.Vers != "" {
 				klog.Warningf("NodePublishVolume: Vers(%s) (in volumeAttributes) is ignored as Vers(%s) also configured in mountOptions", opt.Vers, parseVers)
@@ -303,6 +303,10 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 				klog.Warningf("NodePublishVolume: Options(%v) (in volumeAttributes) is ignored as Options(%v) also configured in mountOptions", opt.Options, parseOptions)
 			}
 			opt.Options = parseOptions
+		}
+		if akID != "" && akSecret != "" {
+			opt.AkID = akID
+			opt.AkSecret = akSecret
 		}
 	}
 
