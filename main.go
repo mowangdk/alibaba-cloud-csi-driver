@@ -275,7 +275,9 @@ func main() {
 				klog.Fatalf("CSI start failed, not support driver: %s", driverName)
 			}
 
-			server := common.NewCSIServer(driverName, driver)
+			// The metric "type" label uses the short driver type (e.g. "disk", "bmcpfs").
+			driverType := strings.TrimSuffix(driverName, TypePluginSuffix)
+			server := common.NewCSIServer(driverType, driver)
 			wg.Go(func() {
 				common.Serve(server, endpoint)
 			})
