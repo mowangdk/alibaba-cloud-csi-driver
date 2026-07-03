@@ -9,7 +9,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
-const defaultQps = 2
+const defaultQps = 6
 
 type NasClientFactory struct {
 	// ratelimiter only takes effect on v2 client
