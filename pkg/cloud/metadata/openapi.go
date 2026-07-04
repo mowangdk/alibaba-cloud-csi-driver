@@ -8,6 +8,7 @@ import (
 
 	ecs20140526 "github.com/alibabacloud-go/ecs-20140526/v7/client"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud"
+	"k8s.io/utils/ptr"
 )
 
 type OpenAPIMetadata struct {
@@ -21,6 +22,11 @@ func NewOpenAPIMetadata(c cloud.ECSv2Interface, instanceId string) (*OpenAPIMeta
 	}
 	instanceRequest := ecs20140526.DescribeInstancesRequest{
 		InstanceIds: new(string(ids)),
+	}
+	if diskHighDensityModeEnabled() {
+		// Request the high-density flag from AdditionalInfo. Only when the feature is
+		// on, so a server that rejects the non-standard attribute never receives it.
+		instanceRequest.AdditionalAttributes = []*string{new("DISK_HIGH_DENSITY_MODE")}
 	}
 
 	instanceResponse, err := c.DescribeInstances(&instanceRequest)
@@ -48,12 +54,15 @@ func (m *OpenAPIMetadata) get(key MetadataKey) *string {
 	return nil
 }
 
-func (m *OpenAPIMetadata) Get(key MetadataKey) (string, error) {
-	v := m.get(key)
-	if v == nil {
-		return "", ErrUnknownMetadataKey
+func (m *OpenAPIMetadata) GetAny(_ *mcontext, key MetadataKey) (any, error) {
+	if key == isHighDensityMode {
+		ai := m.instance.AdditionalInfo
+		return ai != nil && ptr.Deref(ai.EnableHighDensityMode, false), nil
 	}
-	return *v, nil
+	if v := m.get(key); v != nil {
+		return *v, nil
+	}
+	return nil, ErrUnknownMetadataKey
 }
 
 type OpenAPIFetcher struct {
@@ -65,7 +74,7 @@ func (f *OpenAPIFetcher) ID() fetcherID { return openAPIFetcherID }
 
 func (f *OpenAPIFetcher) FetchFor(ctx *mcontext, key MetadataKey) (middleware, error) {
 	switch key {
-	case ZoneID, InstanceType:
+	case ZoneID, InstanceType, isHighDensityMode:
 	default:
 		return nil, ErrUnknownMetadataKey
 	}
@@ -93,5 +102,5 @@ func (f *OpenAPIFetcher) FetchFor(ctx *mcontext, key MetadataKey) (middleware, e
 	if err != nil {
 		return nil, err
 	}
-	return newImmutable(strProvider{p}, "OpenAPI"), nil
+	return newImmutable(p, "OpenAPI"), nil
 }

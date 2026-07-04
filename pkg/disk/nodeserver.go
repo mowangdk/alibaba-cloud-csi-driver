@@ -872,7 +872,7 @@ func (ns *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoReque
 		}
 		logger.V(2).Info("using labeler annotation for maxVolumes, skipping all OpenAPI calls", "maxVolumes", maxVolumesNum)
 	} else if maxVolumesNum == 0 {
-		quantity, err := m.DiskQuantity()
+		quantity, err := metadata.EffectiveDiskQuantity(m)
 		if err != nil {
 			if errors.Is(err, metadata.ErrUnknownMetadataKey) {
 				// Some LingJun node don't have this data

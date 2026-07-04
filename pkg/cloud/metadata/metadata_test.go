@@ -14,9 +14,11 @@ import (
 	"github.com/jarcoal/httpmock"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud/metadata/imds"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/features"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	fake "k8s.io/client-go/kubernetes/fake"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/klog/v2/ktesting"
 )
 
@@ -313,6 +315,134 @@ func TestGetUnknownKey(t *testing.T) {
 
 	_, err := m.Get(99999)
 	assert.Equal(t, ErrUnknownMetadataKey, err)
+}
+
+// effProvider is a controllable MetadataProvider for EffectiveDiskQuantity tests.
+// It counts IsHighDensityMode calls so tests can assert the per-instance
+// DescribeInstances is skipped for types without high-density support.
+type effProvider struct {
+	normal, density int32
+	normalErr       error
+	densityErr      error
+	hd              bool
+	hdErr           error
+	hdCalls         int
+}
+
+func (p *effProvider) Get(MetadataKey) (string, error)   { return "", ErrUnknownMetadataKey }
+func (p *effProvider) MachineKind() (MachineKind, error) { return MachineKindECS, nil }
+func (p *effProvider) DiskQuantity() (int32, error)      { return p.normal, p.normalErr }
+func (p *effProvider) DiskQuantityHighDensity() (int32, error) {
+	return p.density, p.densityErr
+}
+func (p *effProvider) IsHighDensityMode() (bool, error) {
+	p.hdCalls++
+	return p.hd, p.hdErr
+}
+func (p *effProvider) WithSession(context.Context) MetadataProvider { return p }
+
+// When the DiskHighDensityMode feature is off, the high-density accessors must
+// short-circuit without making any OpenAPI call.
+func TestHighDensityAccessorsGateOff(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FunctionalMutableFeatureGate, features.DiskHighDensityMode, false)
+	ctrl := gomock.NewController(t)
+	client := cloud.NewMockECSv2Interface(ctrl) // no EXPECT: any OpenAPI call fails the test
+
+	m := testMetadata(t, fakeMiddleware{InstanceType: "ecs.c7a.4xlarge", InstanceID: "i-x"})
+	m.EnableOpenAPI(client)
+
+	density, err := m.DiskQuantityHighDensity()
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), density)
+
+	hd, err := m.IsHighDensityMode()
+	assert.NoError(t, err)
+	assert.False(t, hd)
+}
+
+func TestEffectiveDiskQuantity(t *testing.T) {
+	errBoom := errors.New("boom")
+	cases := []struct {
+		name        string
+		p           effProvider
+		want        int32
+		wantErr     bool
+		wantHDCalls int
+	}{
+		{
+			name:        "no high-density support",
+			p:           effProvider{normal: 9, density: 0}, // 0 = unsupported type / feature off
+			want:        9,
+			wantHDCalls: 0, // must not call the per-instance DescribeInstances
+		},
+		{
+			name:        "high density unavailable",
+			p:           effProvider{normal: 9, density: 0, densityErr: ErrUnknownMetadataKey},
+			want:        9,
+			wantHDCalls: 0, // e.g. non-ECS node -> normal, no DescribeInstances
+		},
+		{
+			name:        "density equal to normal",
+			p:           effProvider{normal: 33, density: 33},
+			want:        33,
+			wantHDCalls: 0,
+		},
+		{
+			name:        "capable but mode off",
+			p:           effProvider{normal: 9, density: 33, hd: false},
+			want:        9,
+			wantHDCalls: 1,
+		},
+		{
+			name:        "capable and mode on",
+			p:           effProvider{normal: 9, density: 33, hd: true},
+			want:        33,
+			wantHDCalls: 1,
+		},
+		{
+			// Defensive: the two modes are mutually exclusive, so if the instance
+			// really runs in high-density mode we honor DensityDiskQuantity even when
+			// it is (unexpectedly) lower than the normal DiskQuantity.
+			name:        "density lower, mode on",
+			p:           effProvider{normal: 9, density: 5, hd: true},
+			want:        5,
+			wantHDCalls: 1,
+		},
+		{
+			name:        "density lower, mode off",
+			p:           effProvider{normal: 9, density: 5, hd: false},
+			want:        9,
+			wantHDCalls: 1,
+		},
+		{
+			name:    "density lookup error propagates",
+			p:       effProvider{normal: 9, density: 0, densityErr: errBoom},
+			wantErr: true,
+		},
+		{
+			name:    "normal error propagates",
+			p:       effProvider{normalErr: errBoom},
+			wantErr: true,
+		},
+		{
+			name:    "high-density flag error propagates",
+			p:       effProvider{normal: 9, density: 33, hdErr: errBoom},
+			wantErr: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := c.p
+			got, err := EffectiveDiskQuantity(&p)
+			if c.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, c.want, got)
+			assert.Equal(t, c.wantHDCalls, p.hdCalls)
+		})
+	}
 }
 
 type fakeMiddleware map[MetadataKey]any

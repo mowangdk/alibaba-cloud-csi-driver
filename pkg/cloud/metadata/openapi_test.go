@@ -8,8 +8,11 @@ import (
 	ecs20140526 "github.com/alibabacloud-go/ecs-20140526/v7/client"
 	"github.com/golang/mock/gomock"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/features"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	"k8s.io/utils/ptr"
 )
 
 // It is too long, only show some fields
@@ -61,10 +64,80 @@ func TestGetOpenAPI(t *testing.T) {
 	ecsClient := testEcsClient(t)
 
 	m, err := NewOpenAPIMetadata(ecsClient, "i-2zec1slzwdzrwmvlr4w2")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	assert.Equal(t, "cn-beijing-k", MustGet(m, ZoneID))
-	assert.Equal(t, "ecs.g7.xlarge", MustGet(m, InstanceType))
+	ctx := testMContext(t)
+	zone, err := m.GetAny(ctx, ZoneID)
+	assert.NoError(t, err)
+	assert.Equal(t, "cn-beijing-k", zone)
+
+	it, err := m.GetAny(ctx, InstanceType)
+	assert.NoError(t, err)
+	assert.Equal(t, "ecs.g7.xlarge", it)
+}
+
+func TestGetOpenAPIHighDensity(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FunctionalMutableFeatureGate, features.DiskHighDensityMode, true)
+	cases := []struct {
+		name string
+		ai   *ecs20140526.DescribeInstancesResponseBodyInstancesInstanceAdditionalInfo
+		want bool
+	}{
+		{"enabled", &ecs20140526.DescribeInstancesResponseBodyInstancesInstanceAdditionalInfo{EnableHighDensityMode: new(true)}, true},
+		{"disabled", &ecs20140526.DescribeInstancesResponseBodyInstancesInstanceAdditionalInfo{EnableHighDensityMode: new(false)}, false},
+		{"nil flag", &ecs20140526.DescribeInstancesResponseBodyInstancesInstanceAdditionalInfo{}, false},
+		{"nil additional info", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := cloud.NewMockECSv2Interface(ctrl)
+			resp := &ecs20140526.DescribeInstancesResponse{
+				Body: &ecs20140526.DescribeInstancesResponseBody{
+					Instances: &ecs20140526.DescribeInstancesResponseBodyInstances{
+						Instance: []*ecs20140526.DescribeInstancesResponseBodyInstancesInstance{
+							{InstanceId: new("i-hd"), AdditionalInfo: c.ai},
+						},
+					},
+				},
+			}
+			client.EXPECT().DescribeInstances(gomock.Any()).DoAndReturn(
+				func(req *ecs20140526.DescribeInstancesRequest) (*ecs20140526.DescribeInstancesResponse, error) {
+					require.Len(t, req.AdditionalAttributes, 1)
+					assert.Equal(t, "DISK_HIGH_DENSITY_MODE", ptr.Deref(req.AdditionalAttributes[0], ""))
+					return resp, nil
+				})
+
+			m, err := NewOpenAPIMetadata(client, "i-hd")
+			require.NoError(t, err)
+			v, err := m.GetAny(testMContext(t), isHighDensityMode)
+			assert.NoError(t, err)
+			assert.Equal(t, c.want, v)
+		})
+	}
+}
+
+func TestGetOpenAPINoAttrWhenGateOff(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, features.FunctionalMutableFeatureGate, features.DiskHighDensityMode, false)
+	ctrl := gomock.NewController(t)
+	client := cloud.NewMockECSv2Interface(ctrl)
+	resp := &ecs20140526.DescribeInstancesResponse{
+		Body: &ecs20140526.DescribeInstancesResponseBody{
+			Instances: &ecs20140526.DescribeInstancesResponseBodyInstances{
+				Instance: []*ecs20140526.DescribeInstancesResponseBodyInstancesInstance{
+					{InstanceId: new("i-hd")},
+				},
+			},
+		},
+	}
+	client.EXPECT().DescribeInstances(gomock.Any()).DoAndReturn(
+		func(req *ecs20140526.DescribeInstancesRequest) (*ecs20140526.DescribeInstancesResponse, error) {
+			assert.Empty(t, req.AdditionalAttributes, "must not send the non-standard attribute when the feature is off")
+			return resp, nil
+		})
+
+	_, err := NewOpenAPIMetadata(client, "i-hd")
+	require.NoError(t, err)
 }
 
 func TestGetOpenAPIError(t *testing.T) {
