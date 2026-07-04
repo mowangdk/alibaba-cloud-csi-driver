@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --show-toplevel)"
 VALUES_FILE="$ROOT/.local/test-values.yaml"
 
 REGISTRY=$(yq '.images.registry' "$VALUES_FILE")
+REGISTRY_VPC=$(yq '.images.registryVPC' "$VALUES_FILE")
 SECRET_NAME=$(yq '.imagePullSecrets[0]' "$VALUES_FILE")
 
 AUTH=$(jq -r --arg server "$REGISTRY" '.auths[$server].auth // empty' ~/.docker/config.json)
@@ -14,8 +15,17 @@ if [ -z "$AUTH" ]; then
     exit 1
 fi
 
-jq -n --arg server "$REGISTRY" --arg auth "$AUTH" \
-    '{"auths": {($server): {"auth": $auth}}}' | \
+# In-cluster pulls use the VPC endpoint (images.registryVPC). You usually cannot
+# `docker login` to a VPC-only endpoint from outside the VPC, but the same ACR
+# credential works for both endpoints, so authorize registryVPC with the same auth.
+AUTHS=$(jq -n --arg server "$REGISTRY" --arg auth "$AUTH" \
+    '{($server): {"auth": $auth}}')
+if [ -n "$REGISTRY_VPC" ] && [ "$REGISTRY_VPC" != "null" ] && [ "$REGISTRY_VPC" != "$REGISTRY" ]; then
+    AUTHS=$(jq --arg server "$REGISTRY_VPC" --arg auth "$AUTH" \
+        '. + {($server): {"auth": $auth}}' <<<"$AUTHS")
+fi
+
+jq -n --argjson auths "$AUTHS" '{"auths": $auths}' | \
 kubectl create secret generic "$SECRET_NAME" \
     --from-file=.dockerconfigjson=/dev/stdin \
     --type=kubernetes.io/dockerconfigjson \
