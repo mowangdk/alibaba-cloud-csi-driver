@@ -156,6 +156,59 @@ func TestGetEcsInstanceTypeError(t *testing.T) {
 	}
 }
 
+func TestGetEcsInstanceTypeDensity(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := cloud.NewMockECSv2Interface(ctrl)
+	resp := &ecs20140526.DescribeInstanceTypesResponse{
+		Body: &ecs20140526.DescribeInstanceTypesResponseBody{
+			InstanceTypes: &ecs20140526.DescribeInstanceTypesResponseBodyInstanceTypes{
+				InstanceType: []*ecs20140526.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+					{
+						InstanceTypeId: new("ecs.c7a.4xlarge"),
+						DiskQuantity:   new(int32(9)),
+						Attributes: &ecs20140526.DescribeInstanceTypesResponseBodyInstanceTypesInstanceTypeAttributes{
+							Attribute: []*ecs20140526.DescribeInstanceTypesResponseBodyInstanceTypesInstanceTypeAttributesAttribute{
+								{Name: new("SomethingElse"), Value: new("x")},
+								{Name: new("DensityDiskQuantity"), Value: new("33")},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.EXPECT().DescribeInstanceTypes(gomock.Any()).DoAndReturn(
+		func(req *ecs20140526.DescribeInstanceTypesRequest) (*ecs20140526.DescribeInstanceTypesResponse, error) {
+			// MaxResults must be set or the API omits the Attributes array.
+			assert.NotNil(t, req.MaxResults, "MaxResults must be set")
+			return resp, nil
+		})
+
+	p, err := NewEcsInstanceTypeMetadata(client, "ecs.c7a.4xlarge")
+	require.NoError(t, err)
+	assert.Equal(t, int32(9), p.DiskQuantity())
+	assert.Equal(t, int32(33), p.DiskQuantityHighDensity())
+
+	v, err := p.GetAny(testMContext(t), diskQuantityHighDensity)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(33), v)
+}
+
+func TestGetEcsInstanceTypeNoDensity(t *testing.T) {
+	m := ECSInstanceTypeMetadata{
+		t: &ecs20140526.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+			InstanceTypeId: new("ecs.g6.xlarge"),
+			DiskQuantity:   new(int32(17)),
+			// No Attributes -> no high-density support
+		},
+	}
+	assert.Equal(t, int32(0), m.DiskQuantityHighDensity())
+	// 0 is a valid answer for an ECS type without high-density support, not an error.
+	v, err := m.GetAny(testMContext(t), diskQuantityHighDensity)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(0), v)
+}
+
 func TestGetEcsInstanceTypeNoDiskQuantity(t *testing.T) {
 	m := ECSInstanceTypeMetadata{
 		t: &ecs20140526.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{

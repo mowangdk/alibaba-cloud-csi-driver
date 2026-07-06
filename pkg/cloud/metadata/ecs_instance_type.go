@@ -2,9 +2,11 @@ package metadata
 
 import (
 	"fmt"
+	"strconv"
 
 	ecs20140526 "github.com/alibabacloud-go/ecs-20140526/v7/client"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud"
+	"k8s.io/utils/ptr"
 )
 
 type ECSInstanceTypeMetadata struct {
@@ -14,6 +16,10 @@ type ECSInstanceTypeMetadata struct {
 func NewEcsInstanceTypeMetadata(c cloud.ECSv2Interface, instanceType string) (*ECSInstanceTypeMetadata, error) {
 	req := ecs20140526.DescribeInstanceTypesRequest{
 		InstanceTypes: []*string{&instanceType},
+		// MaxResults is required for the response to include the Attributes array
+		// (which carries DensityDiskQuantity). A single-type query returns one
+		// result with an empty NextToken, so no pagination is needed.
+		MaxResults: new(int64(100)),
 	}
 	resp, err := c.DescribeInstanceTypes(&req)
 	if err != nil {
@@ -36,6 +42,8 @@ func (m *ECSInstanceTypeMetadata) GetAny(_ *mcontext, key MetadataKey) (any, err
 		if m.t.DiskQuantity != nil {
 			return *m.t.DiskQuantity, nil
 		}
+	case diskQuantityHighDensity:
+		return m.DiskQuantityHighDensity(), nil
 	}
 	return nil, ErrUnknownMetadataKey
 }
@@ -48,6 +56,22 @@ func (m *ECSInstanceTypeMetadata) DiskQuantity() int32 {
 	return *m.t.DiskQuantity
 }
 
+// DiskQuantityHighDensity returns the DensityDiskQuantity attribute value (the disk
+// count attachable in HighDensityDisk mode), or 0 if the type does not advertise it.
+func (m *ECSInstanceTypeMetadata) DiskQuantityHighDensity() int32 {
+	if m.t.Attributes == nil {
+		return 0
+	}
+	for _, a := range m.t.Attributes.Attribute {
+		if a != nil && ptr.Deref(a.Name, "") == "DensityDiskQuantity" {
+			if v, err := strconv.Atoi(ptr.Deref(a.Value, "")); err == nil {
+				return int32(v)
+			}
+		}
+	}
+	return 0
+}
+
 type ECSInstanceTypeFetcher struct {
 	ecsClient cloud.ECSv2Interface
 	mPre      middleware
@@ -57,7 +81,7 @@ func (f *ECSInstanceTypeFetcher) ID() fetcherID { return ecsInstanceTypeFetcherI
 
 func (f *ECSInstanceTypeFetcher) FetchFor(ctx *mcontext, key MetadataKey) (middleware, error) {
 	switch key {
-	case diskQuantity:
+	case diskQuantity, diskQuantityHighDensity:
 	default:
 		return nil, ErrUnknownMetadataKey
 	}

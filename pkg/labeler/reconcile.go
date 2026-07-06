@@ -39,7 +39,7 @@ type Reconciler struct {
 	NodeLister corev1listers.NodeLister
 	Queue      workqueue.TypedRateLimitingInterface[string]
 
-	instanceTypeCache *ttlcache.TTLCache[string, int32]
+	instanceTypeCache *ttlcache.TTLCache[string, diskQuantities]
 	nodeTypeCache     *ttlcache.TTLCache[string, int32]
 	diskTypesCache    *ttlcache.TTLCache[diskTypeCacheKey, []string]
 }
@@ -47,6 +47,14 @@ type Reconciler struct {
 type diskTypeCacheKey struct {
 	instanceType string
 	zoneID       string
+}
+
+// diskQuantities holds the per-instance-type disk attach limits. Both values are
+// per-type and safe to cache. highDensity is 0 when the type does not support
+// HighDensityDisk mode or the feature gate is off.
+type diskQuantities struct {
+	normal      int32
+	highDensity int32
 }
 
 func (r *Reconciler) enqueue(obj any) {
@@ -178,9 +186,21 @@ func (r *Reconciler) resolveECS(ctx context.Context, mp metadata.MetadataProvide
 		return 0, nil, err
 	}
 
-	diskQuantity, err := r.resolveDiskQuantity(ctx, mp, instanceType)
+	quantities, err := r.resolveDiskQuantities(ctx, mp, instanceType)
 	if err != nil {
 		return 0, nil, fmt.Errorf("get disk quantity for %s: %w", instanceType, err)
+	}
+	diskQuantity := quantities.normal
+	if quantities.highDensity > quantities.normal {
+		// The type supports HighDensityDisk mode. Whether it is actually enabled is
+		// per-instance, so query the flag per node (uncached).
+		hd, err := mp.IsHighDensityMode()
+		if err != nil {
+			return 0, nil, fmt.Errorf("check high density mode for %s: %w", instanceType, err)
+		}
+		if hd {
+			diskQuantity = quantities.highDensity
+		}
 	}
 
 	zoneID, err := mp.Get(metadata.ZoneID)
@@ -210,11 +230,19 @@ func (r *Reconciler) resolveLingjun(ctx context.Context, mp metadata.MetadataPro
 	return diskQuantity, diskTypes, nil
 }
 
-// resolveDiskQuantity returns the cached disk quantity for instanceType,
-// computing it via nm.DiskQuantity() if not cached.
-func (r *Reconciler) resolveDiskQuantity(ctx context.Context, nm metadata.MetadataProvider, instanceType string) (int32, error) {
-	return r.instanceTypeCache.Get(ctx, instanceType, func() (int32, error) {
-		return nm.DiskQuantity()
+// resolveDiskQuantities returns the cached per-type disk quantities for instanceType,
+// computing them via nm on a cache miss.
+func (r *Reconciler) resolveDiskQuantities(ctx context.Context, nm metadata.MetadataProvider, instanceType string) (diskQuantities, error) {
+	return r.instanceTypeCache.Get(ctx, instanceType, func() (diskQuantities, error) {
+		normal, err := nm.DiskQuantity()
+		if err != nil {
+			return diskQuantities{}, err
+		}
+		highDensity, err := nm.DiskQuantityHighDensity()
+		if err != nil && !errors.Is(err, metadata.ErrUnknownMetadataKey) {
+			return diskQuantities{}, err
+		}
+		return diskQuantities{normal: normal, highDensity: highDensity}, nil
 	})
 }
 

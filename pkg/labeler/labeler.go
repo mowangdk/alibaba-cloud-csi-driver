@@ -172,7 +172,7 @@ func runOnce(ctx context.Context, client kubernetes.Interface, ecsClient cloud.E
 		RegionID:          regionID,
 		NodeLister:        nodeInformer.Lister(),
 		Queue:             queue,
-		instanceTypeCache: ttlcache.NewTTLCache[string, int32](defaultInstanceTypeTTL),
+		instanceTypeCache: ttlcache.NewTTLCache[string, diskQuantities](defaultInstanceTypeTTL),
 		nodeTypeCache:     ttlcache.NewTTLCache[string, int32](defaultInstanceTypeTTL),
 		diskTypesCache:    ttlcache.NewTTLCache[diskTypeCacheKey, []string](defaultInstanceTypeTTL),
 	}

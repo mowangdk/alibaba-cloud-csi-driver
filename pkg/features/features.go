@@ -62,6 +62,16 @@ const (
 	// for fuse pod delete operations. When not explicitly set via --feature-gates,
 	// the behavior is determined by the Kubernetes server version.
 	ConstrainFusePodDeleteRV featuregate.Feature = "ConstrainFusePodDeleteRV"
+
+	// Populate NodeGetInfo MaxVolumesPerNode from the ECS HighDensityDisk mode
+	// (云盘高密模式) limit instead of the default DiskQuantity.
+	//
+	// Relies on non-public ECS OpenAPI fields (AdditionalInfo.EnableHighDensityMode and
+	// the DensityDiskQuantity instance-type attribute). When enabled, the node/labeler
+	// makes one extra DescribeInstances call per high-density-capable node; nodes whose
+	// instance type does not support high density incur no extra call. When disabled,
+	// the behavior is byte-identical to before (no extra API call).
+	DiskHighDensityMode featuregate.Feature = "DiskHighDensityMode"
 )
 
 var (
@@ -73,6 +83,7 @@ var (
 		DisableExpandAutoSnapshots: {Default: true, PreRelease: featuregate.GA, LockToDefault: true},
 		EnableVolumeGroupSnapshots: {Default: false, PreRelease: featuregate.Alpha},
 		EnableDeleteAutoSnapshots:  {Default: false, PreRelease: featuregate.Alpha},
+		DiskHighDensityMode:        {Default: false, PreRelease: featuregate.Alpha},
 	}
 
 	defaultOSSFeatureGate = map[featuregate.Feature]featuregate.FeatureSpec{

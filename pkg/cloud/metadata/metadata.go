@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/features"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -35,7 +36,9 @@ const (
 
 	// non-string metadata, not public, can only access with corresponding methods
 	machineKind
-	diskQuantity // int32
+	diskQuantity            // int32
+	diskQuantityHighDensity // int32
+	isHighDensityMode       // bool
 )
 
 const LingjunConfigFile = "/host/etc/eflo_config/lingjun_config"
@@ -70,6 +73,10 @@ func (k MetadataKey) String() string {
 		return "MachineKind"
 	case diskQuantity:
 		return "DiskQuantity"
+	case diskQuantityHighDensity:
+		return "DiskQuantityHighDensity"
+	case isHighDensityMode:
+		return "IsHighDensityMode"
 	default:
 		return fmt.Sprintf("MetadataKey(%d)", k)
 	}
@@ -118,6 +125,16 @@ type MetadataProvider interface {
 	strMetadataProvider
 	MachineKind() (MachineKind, error)
 	DiskQuantity() (int32, error)
+	// DiskQuantityHighDensity returns the per-instance-type DensityDiskQuantity, the
+	// number of disks attachable when the instance runs in HighDensityDisk mode, or
+	// 0 if the type does not support high density or the feature is off. Returns
+	// ErrUnknownMetadataKey only when it cannot be determined (e.g. non-ECS nodes).
+	DiskQuantityHighDensity() (int32, error)
+	// IsHighDensityMode reports whether this instance currently runs in
+	// HighDensityDisk mode. It performs a per-instance DescribeInstances call, so
+	// callers should only consult it for high-density-capable types (see
+	// EffectiveDiskQuantity).
+	IsHighDensityMode() (bool, error)
 	WithSession(ctx context.Context) MetadataProvider
 }
 
@@ -185,6 +202,53 @@ func getT[T any](m *Metadata, key MetadataKey) (T, error) {
 func (m *Metadata) Get(key MetadataKey) (string, error) { return getT[string](m, key) }
 func (m *Metadata) MachineKind() (MachineKind, error)   { return getT[MachineKind](m, machineKind) }
 func (m *Metadata) DiskQuantity() (int32, error)        { return getT[int32](m, diskQuantity) }
+func (m *Metadata) DiskQuantityHighDensity() (int32, error) {
+	if !diskHighDensityModeEnabled() {
+		return 0, nil // feature off -> no high density, same as an unsupported type
+	}
+	return getT[int32](m, diskQuantityHighDensity)
+}
+func (m *Metadata) IsHighDensityMode() (bool, error) {
+	if !diskHighDensityModeEnabled() {
+		return false, nil
+	}
+	return getT[bool](m, isHighDensityMode)
+}
+
+func diskHighDensityModeEnabled() bool {
+	return features.FunctionalMutableFeatureGate.Enabled(features.DiskHighDensityMode)
+}
+
+// EffectiveDiskQuantity returns the number of data disks attachable to this
+// instance, accounting for ECS HighDensityDisk mode: DensityDiskQuantity when the
+// instance runs in high-density mode and its type supports it, else the normal
+// DiskQuantity.
+func EffectiveDiskQuantity(m MetadataProvider) (int32, error) {
+	normal, err := m.DiskQuantity()
+	if err != nil {
+		return 0, err
+	}
+	density, err := m.DiskQuantityHighDensity()
+	if err != nil {
+		if errors.Is(err, ErrUnknownMetadataKey) {
+			return normal, nil // type has no high-density support -> no DescribeInstances call
+		}
+		return 0, err
+	}
+	if density <= 0 || density == normal {
+		// No usable high-density value (unsupported / feature off), or identical to
+		// normal: high density cannot change the answer, so skip the DescribeInstances call.
+		return normal, nil
+	}
+	hd, err := m.IsHighDensityMode() // the per-instance OpenAPI call
+	if err != nil {
+		return 0, err
+	}
+	if hd {
+		return density, nil
+	}
+	return normal, nil
+}
 
 type fetcher interface {
 	// FetchFor should return [ErrUnknownMetadataKey] if the key is not supported
@@ -435,8 +499,10 @@ func GetFallbackZoneID(m MetadataProvider) (string, error) {
 type FakeProvider struct {
 	Values map[MetadataKey]string
 	V      struct {
-		MachineKind  MachineKind
-		DiskQuantity int32
+		MachineKind             MachineKind
+		DiskQuantity            int32
+		DiskQuantityHighDensity int32
+		IsHighDensityMode       bool
 	}
 }
 
@@ -453,6 +519,14 @@ func (p *FakeProvider) MachineKind() (MachineKind, error) {
 
 func (p *FakeProvider) DiskQuantity() (int32, error) {
 	return p.V.DiskQuantity, nil
+}
+
+func (p *FakeProvider) DiskQuantityHighDensity() (int32, error) {
+	return p.V.DiskQuantityHighDensity, nil
+}
+
+func (p *FakeProvider) IsHighDensityMode() (bool, error) {
+	return p.V.IsHighDensityMode, nil
 }
 
 func (p *FakeProvider) WithSession(ctx context.Context) MetadataProvider {

@@ -2,6 +2,7 @@ package labeler
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 
 	ecsv2 "github.com/alibabacloud-go/ecs-20140526/v7/client"
@@ -9,6 +10,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/cloud"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/disk"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/features"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/utils/ttlcache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,6 +21,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/util/workqueue"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/klog/v2/ktesting"
 	"k8s.io/utils/ptr"
 )
@@ -29,6 +32,35 @@ func describeInstanceTypesV2Resp(instanceType string, diskQty int32) *ecsv2.Desc
 			InstanceTypes: &ecsv2.DescribeInstanceTypesResponseBodyInstanceTypes{
 				InstanceType: []*ecsv2.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
 					{InstanceTypeId: &instanceType, DiskQuantity: &diskQty},
+				},
+			},
+		},
+	}
+}
+
+// describeInstanceTypesV2RespDensity builds a response advertising both the normal
+// DiskQuantity and the DensityDiskQuantity attribute (HighDensityDisk mode).
+func describeInstanceTypesV2RespDensity(instanceType string, diskQty, density int32) *ecsv2.DescribeInstanceTypesResponse {
+	resp := describeInstanceTypesV2Resp(instanceType, diskQty)
+	resp.Body.InstanceTypes.InstanceType[0].Attributes = &ecsv2.DescribeInstanceTypesResponseBodyInstanceTypesInstanceTypeAttributes{
+		Attribute: []*ecsv2.DescribeInstanceTypesResponseBodyInstanceTypesInstanceTypeAttributesAttribute{
+			{Name: new("DensityDiskQuantity"), Value: new(strconv.Itoa(int(density)))},
+		},
+	}
+	return resp
+}
+
+// describeInstancesV2RespHighDensity builds a DescribeInstances response carrying
+// the per-instance EnableHighDensityMode flag.
+func describeInstancesV2RespHighDensity(instanceID string, enabled bool) *ecsv2.DescribeInstancesResponse {
+	return &ecsv2.DescribeInstancesResponse{
+		Body: &ecsv2.DescribeInstancesResponseBody{
+			Instances: &ecsv2.DescribeInstancesResponseBodyInstances{
+				Instance: []*ecsv2.DescribeInstancesResponseBodyInstancesInstance{
+					{
+						InstanceId:     &instanceID,
+						AdditionalInfo: &ecsv2.DescribeInstancesResponseBodyInstancesInstanceAdditionalInfo{EnableHighDensityMode: &enabled},
+					},
 				},
 			},
 		},
@@ -163,7 +195,7 @@ func newTestFixture(t *testing.T, nodes ...*v1.Node) *testFixture {
 			RegionID:          "cn-test",
 			NodeLister:        nodeInformer.Lister(),
 			Queue:             q,
-			instanceTypeCache: ttlcache.NewTTLCache[string, int32](defaultInstanceTypeTTL),
+			instanceTypeCache: ttlcache.NewTTLCache[string, diskQuantities](defaultInstanceTypeTTL),
 			nodeTypeCache:     ttlcache.NewTTLCache[string, int32](defaultInstanceTypeTTL),
 			diskTypesCache:    ttlcache.NewTTLCache[diskTypeCacheKey, []string](defaultInstanceTypeTTL),
 		},
@@ -318,6 +350,113 @@ func TestReconcile_FullPatch(t *testing.T) {
 			"labels": {"node.csi.alibabacloud.com/disktype.cloud_essd": "available", "node.csi.alibabacloud.com/disktype.cloud_regional_disk_auto": "available"}
 		}
 	}`, string(patchBody))
+}
+
+func hdNode(name string) *v1.Node {
+	return &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				"node.kubernetes.io/instance-type": "ecs.c7a.4xlarge",
+				"topology.kubernetes.io/zone":      "cn-test-a",
+			},
+		},
+		Spec: v1.NodeSpec{ProviderID: "cn-test.i-bp1hd"},
+	}
+}
+
+// expectDiskTypesAndDisks sets up the disk-type and attached-disk calls shared by
+// the high-density reconcile subtests (one system disk => nonManaged=1).
+func expectDiskTypesAndDisks(f *testFixture) {
+	f.ecs.EXPECT().DescribeAvailableResource(gomock.Any()).
+		Return(makeAvailResp("cn-test-a", "cloud_essd"), nil)
+	f.ecs.EXPECT().DescribeAvailableResource(gomock.Any()).
+		Return(makeAvailResp("", "cloud_essd"), nil)
+	f.ecs.EXPECT().DescribeDisks(gomock.Any()).
+		Return(&ecsv2.DescribeDisksResponse{
+			Body: &ecsv2.DescribeDisksResponseBody{
+				Disks: &ecsv2.DescribeDisksResponseBodyDisks{
+					Disk: []*ecsv2.DescribeDisksResponseBodyDisksDisk{
+						{DiskId: new("d-system"), Category: new("cloud_essd"), Status: new("In_use")},
+					},
+				},
+			},
+		}, nil)
+}
+
+func patchedMaxDisk(t *testing.T, f *testFixture) []byte {
+	t.Helper()
+	var patchBody []byte
+	for _, a := range f.client.Actions() {
+		if pa, ok := a.(clienttesting.PatchAction); ok {
+			patchBody = pa.GetPatch()
+		}
+	}
+	return patchBody
+}
+
+func TestReconcile_HighDensity(t *testing.T) {
+	t.Run("gate on, mode enabled -> density quantity", func(t *testing.T) {
+		node := hdNode("node-hd-on")
+		f := newTestFixture(t, node)
+		featuregatetesting.SetFeatureGateDuringTest(t, features.FunctionalMutableFeatureGate, features.DiskHighDensityMode, true)
+
+		f.ecs.EXPECT().DescribeInstanceTypes(gomock.Any()).
+			Return(describeInstanceTypesV2RespDensity("ecs.c7a.4xlarge", 9, 33), nil)
+		f.ecs.EXPECT().DescribeInstances(gomock.Any()).DoAndReturn(
+			func(req *ecsv2.DescribeInstancesRequest) (*ecsv2.DescribeInstancesResponse, error) {
+				require.Len(t, req.AdditionalAttributes, 1)
+				assert.Equal(t, "DISK_HIGH_DENSITY_MODE", ptr.Deref(req.AdditionalAttributes[0], ""))
+				return describeInstancesV2RespHighDensity("i-bp1hd", true), nil
+			})
+		expectDiskTypesAndDisks(f)
+
+		logger, ctx := ktesting.NewTestContext(t)
+		require.NoError(t, f.r.reconcile(ctx, logger, node.Name))
+
+		body := patchedMaxDisk(t, f)
+		require.NotNil(t, body)
+		assert.Contains(t, string(body), `"node.csi.alibabacloud.com/max-disk":"32"`) // 33 - 1 system disk
+	})
+
+	t.Run("gate on, mode disabled -> normal quantity", func(t *testing.T) {
+		node := hdNode("node-hd-off")
+		f := newTestFixture(t, node)
+		featuregatetesting.SetFeatureGateDuringTest(t, features.FunctionalMutableFeatureGate, features.DiskHighDensityMode, true)
+
+		f.ecs.EXPECT().DescribeInstanceTypes(gomock.Any()).
+			Return(describeInstanceTypesV2RespDensity("ecs.c7a.4xlarge", 9, 33), nil)
+		f.ecs.EXPECT().DescribeInstances(gomock.Any()).
+			Return(describeInstancesV2RespHighDensity("i-bp1hd", false), nil)
+		expectDiskTypesAndDisks(f)
+
+		logger, ctx := ktesting.NewTestContext(t)
+		require.NoError(t, f.r.reconcile(ctx, logger, node.Name))
+
+		body := patchedMaxDisk(t, f)
+		require.NotNil(t, body)
+		assert.Contains(t, string(body), `"node.csi.alibabacloud.com/max-disk":"8"`) // 9 - 1 system disk
+	})
+
+	t.Run("gate off -> no DescribeInstances, normal quantity", func(t *testing.T) {
+		node := hdNode("node-hd-gateoff")
+		f := newTestFixture(t, node)
+		// Gate defaults to off; be explicit for clarity.
+		featuregatetesting.SetFeatureGateDuringTest(t, features.FunctionalMutableFeatureGate, features.DiskHighDensityMode, false)
+
+		f.ecs.EXPECT().DescribeInstanceTypes(gomock.Any()).
+			Return(describeInstanceTypesV2RespDensity("ecs.c7a.4xlarge", 9, 33), nil)
+		// Must not consult the per-instance high-density flag when the gate is off.
+		f.ecs.EXPECT().DescribeInstances(gomock.Any()).Times(0)
+		expectDiskTypesAndDisks(f)
+
+		logger, ctx := ktesting.NewTestContext(t)
+		require.NoError(t, f.r.reconcile(ctx, logger, node.Name))
+
+		body := patchedMaxDisk(t, f)
+		require.NotNil(t, body)
+		assert.Contains(t, string(body), `"node.csi.alibabacloud.com/max-disk":"8"`) // 9 - 1 system disk
+	})
 }
 
 func TestReconcile_APIErrors(t *testing.T) {
