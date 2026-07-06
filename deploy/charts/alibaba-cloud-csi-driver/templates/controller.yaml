@@ -214,8 +214,8 @@ spec:
             - --default-fstype=ext4
             - --v=5
             - --logging-format={{ .Values.logging.format }}
-            - --kube-api-qps=100
-            - --kube-api-burst=200
+            - --kube-api-qps=1000
+            - --kube-api-burst=2000
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -245,9 +245,9 @@ spec:
             - --csi-address=/csi/csi.sock
             - --http-endpoint=:8081
             - --leader-election=true
-            - --kube-api-qps=100
-            - --kube-api-burst=200
-            - --worker-threads=120
+            - --kube-api-qps=1000
+            - --kube-api-burst=2000
+            - --worker-threads=1200
             - --timeout=30s
           securityContext:
             allowPrivilegeEscalation: false
