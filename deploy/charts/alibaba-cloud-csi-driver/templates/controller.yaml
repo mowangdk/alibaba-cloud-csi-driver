@@ -279,6 +279,9 @@ spec:
             - --http-endpoint=:8082
             - --leader-election
             - --handle-volume-inuse-error=false
+            # Pass pv/pvc name to ControllerModifyVolume so the driver can keep the
+            # disktype label / volume-topology annotation on the PV in sync.
+            - --extra-modify-metadata
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

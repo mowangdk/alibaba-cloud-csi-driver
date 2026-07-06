@@ -20,6 +20,7 @@ package disk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -43,9 +44,12 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
@@ -58,6 +62,7 @@ type controllerServer struct {
 	cd             DiskCreateDelete
 	meta           metadata.MetadataProvider
 	ecs            cloud.ECSInterface
+	clientSet      kubernetes.Interface
 	snapshotWaiter waitstatus.StatusWaiter[ecs.Snapshot]
 	modify         ModifyServer
 	common.GenericControllerServer
@@ -106,9 +111,10 @@ func newSnapshotStatusWaiter() waitstatus.StatusWaiter[ecs.Snapshot] {
 func NewControllerServer(csiCfg utils.Config, ecs cloud.ECSInterface, ecsV2 cloud.ECSv2Interface, m metadata.MetadataProvider) csi.ControllerServer {
 	waiter, batcher := newBatcher(false)
 	c := &controllerServer{
-		recorder: utils.NewEventRecorder(),
-		meta:     m,
-		ecs:      ecs,
+		recorder:  utils.NewEventRecorder(),
+		meta:      m,
+		ecs:       ecs,
+		clientSet: GlobalConfigVar.ClientSet,
 		ad: DiskAttachDetach{
 			ecs:     ecs,
 			waiter:  waiter,
@@ -748,5 +754,64 @@ func (cs *controllerServer) ControllerModifyVolume(ctx context.Context, req *csi
 	if err != nil {
 		return nil, err
 	}
+
+	if pvName := req.MutableParameters[common.PVNameKey]; pvName != "" {
+		if err := cs.updatePVDiskType(ctx, req.VolumeId, pvName, params); err != nil {
+			// The disk is already modified, so this must be a non-final error:
+			// external-resizer keeps re-driving this same target instead of
+			// switching to a different VAC.
+			return nil, status.Errorf(codes.Aborted, "update disktype metadata: %v", err)
+		}
+	}
+
 	return &csi.ControllerModifyVolumeResponse{}, nil
+}
+
+// updatePVDiskType keeps the disktype label and volume-topology annotation on the
+// PV consistent with the disk type after a successful ControllerModifyVolume.
+//
+// Callers must only invoke it when the PV name was supplied by the sidecar
+// (external-resizer --extra-modify-metadata); we never guess it from the disk ID.
+func (cs *controllerServer) updatePVDiskType(ctx context.Context, diskID, pvName string, params ModifyParameters) error {
+	logger := klog.FromContext(ctx).WithValues("pv", pvName)
+
+	// Only category / performance-level changes affect the label & annotation;
+	// skip the DescribeDisks and PV write entirely for the rest.
+	if params.Category == "" && params.PerformanceLevel == "" {
+		return nil
+	}
+
+	// Read the disk's actual category / performance level. params may be incomplete.
+	disk, err := cs.cd.batcher.Describe(ctx, diskID)
+	if err != nil {
+		return fmt.Errorf("describe disk %s: %w", diskID, err)
+	}
+	if disk == nil || disk.Category == "" {
+		// Disk is gone; there is nothing to keep in sync and a retry won't help.
+		logger.V(2).Info("disk gone or has no category, skip updating disktype metadata")
+		return nil
+	}
+
+	label, topo := diskTypeMetadata(Category(disk.Category), PerformanceLevel(disk.PerformanceLevel))
+
+	patch, err := json.Marshal(v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels:      map[string]string{labelVolumeType: label},
+			Annotations: map[string]string{annVolumeTopoKey: topo},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("build patch: %w", err)
+	}
+	_, err = cs.clientSet.CoreV1().PersistentVolumes().Patch(ctx, pvName, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// PV is gone; retrying won't help. The PVC is likely being deleted too.
+			logger.V(2).Info("PV gone, skip updating disktype metadata")
+			return nil
+		}
+		return fmt.Errorf("patch PV %s: %w", pvName, err)
+	}
+	logger.V(2).Info("updated PV disktype metadata", "disktype", label)
+	return nil
 }

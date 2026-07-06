@@ -689,6 +689,8 @@ func parseMutableParameters(mutableParameters map[string]string) (ModifyParamete
 			case strings.HasPrefix(k, REMOVE_DISK_TAG_PREFIX):
 				tagKey := k[len(REMOVE_DISK_TAG_PREFIX):]
 				params.RemoveTags = append(params.RemoveTags, &tagKey)
+			case strings.HasPrefix(k, "csi.storage.k8s.io/"):
+				// pv/pvc metadata injected by external-resizer --extra-modify-metadata.
 			default:
 				return params, fmt.Errorf("unknown parameter %s", k)
 			}
@@ -934,31 +936,12 @@ func volumeCreate(attempt createAttempt, diskID string, volSizeBytes int64, volu
 
 	accessibleTopology := []*csi.Topology{{Segments: segments}}
 	if attempt.Category != "" {
-		// Add PV Label
-		if attempt.Category == DiskESSD && attempt.PerformanceLevel == "" {
-			attempt.PerformanceLevel = "PL1"
-		}
-		// TODO delete performanceLevel key
+		// TODO delete performanceLevel/type keys
 		// delete(volumeContext, "performanceLevel")
-		volumeContext[labelAppendPrefix+labelVolumeType] = attempt.String()
-		// TODO delete type key
 		// delete(volumeContext, "type")
-
-		// Add PV NodeAffinity
-		labelKey := NodeDiskTypeLabelPrefix + string(attempt.Category)
-		expressions := []v1.NodeSelectorRequirement{{
-			Key:      labelKey,
-			Operator: v1.NodeSelectorOpIn,
-			Values:   []string{"available"},
-		}}
-		terms := []v1.NodeSelectorTerm{{
-			MatchExpressions: expressions,
-		}}
-		diskTypeTopo := &v1.NodeSelector{
-			NodeSelectorTerms: terms,
-		}
-		diskTypeTopoBytes, _ := json.Marshal(diskTypeTopo)
-		volumeContext[annAppendPrefix+annVolumeTopoKey] = string(diskTypeTopoBytes)
+		label, topo := diskTypeMetadata(attempt.Category, attempt.PerformanceLevel)
+		volumeContext[labelAppendPrefix+labelVolumeType] = label // Add PV Label
+		volumeContext[annAppendPrefix+annVolumeTopoKey] = topo   // Add PV NodeAffinity
 	}
 
 	klog.Infof("volumeCreate: volumeContext: %+v", volumeContext)
@@ -971,6 +954,25 @@ func volumeCreate(attempt createAttempt, diskID string, volSizeBytes int64, volu
 	}
 
 	return tmpVol
+}
+
+func diskTypeMetadata(category Category, performanceLevel PerformanceLevel) (label, topologyAnnotation string) {
+	if category == DiskESSD && performanceLevel == "" {
+		performanceLevel = "PL1"
+	}
+	label = createAttempt{Category: category, PerformanceLevel: performanceLevel}.String()
+
+	diskTypeTopo := &v1.NodeSelector{
+		NodeSelectorTerms: []v1.NodeSelectorTerm{{
+			MatchExpressions: []v1.NodeSelectorRequirement{{
+				Key:      NodeDiskTypeLabelPrefix + string(category),
+				Operator: v1.NodeSelectorOpIn,
+				Values:   []string{"available"},
+			}},
+		}},
+	}
+	diskTypeTopoBytes, _ := json.Marshal(diskTypeTopo)
+	return label, string(diskTypeTopoBytes)
 }
 
 func parseSnapshotID(req *csi.CreateVolumeRequest) (string, error) {

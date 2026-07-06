@@ -21,6 +21,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -957,6 +958,30 @@ func TestPrepareMountInfos(t *testing.T) {
 			options, fsType := prepareMountInfos(tt.req)
 			assert.Equal(t, tt.expectedOptions, options)
 			assert.Equal(t, tt.expectedFsType, fsType)
+		})
+	}
+}
+
+func TestDiskTypeMetadata(t *testing.T) {
+	cases := []struct {
+		name      string
+		category  Category
+		pl        PerformanceLevel
+		wantLabel string
+		// wantTopoCategory is the category expected in the node-affinity key.
+		wantTopoCategory string
+	}{
+		{"essd with PL", DiskESSD, "PL2", "cloud_essd.PL2", "cloud_essd"},
+		{"essd defaults to PL1", DiskESSD, "", "cloud_essd.PL1", "cloud_essd"},
+		{"category without PL", Category("cloud_auto"), "", "cloud_auto", "cloud_auto"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			label, topo := diskTypeMetadata(c.category, c.pl)
+			assert.Equal(t, c.wantLabel, label)
+
+			wantTopo := fmt.Sprintf(`{"nodeSelectorTerms":[{"matchExpressions":[{"key":"node.csi.alibabacloud.com/disktype.%s","operator":"In","values":["available"]}]}]}`, c.wantTopoCategory)
+			assert.JSONEq(t, wantTopo, topo)
 		})
 	}
 }
