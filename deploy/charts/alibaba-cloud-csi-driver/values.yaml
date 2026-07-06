@@ -153,7 +153,7 @@ images:
     tag: "v1.91.10.ack.5-f5e325e"
   ossfs2:
     repo: acs/csi-ossfs2
-    tag: "v2.0.7.ack.1-2d5bf24"
+    tag: "v2.0.8.ack.1-d7bd1d4"
 
 # List of image pull secrets to use for pulling images.
 imagePullSecrets: [ ]
