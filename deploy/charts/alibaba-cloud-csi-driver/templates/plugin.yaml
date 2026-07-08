@@ -131,6 +131,8 @@ spec:
               value: HTTP
             - name: PRIVATE_CLOUD_TAG
               value: "true"
+            - name: DEFAULT_OSSFS_OPTIONS
+              value: no_check_certificate
 {{- end -}}
 {{- if not $nodePool.deploy.labeler.enabled }}
 {{- include "akEnv" $nodePool.deploy.accessKey | nindent 12 }}
