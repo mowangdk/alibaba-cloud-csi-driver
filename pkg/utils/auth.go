@@ -17,9 +17,9 @@ limitations under the License.
 package utils
 
 import (
-	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -72,16 +72,60 @@ type AccessControl struct {
 	UseMode         AccessControlMode
 }
 
-// ValidatePath is check path string is valid
-func ValidatePath(path string) (bool, error) {
-	var msg string
-	if strings.Contains(path, "../") || strings.Contains(path, "/..") || strings.Contains(path, "..") {
-		msg = msg + fmt.Sprintf("Path %s has illegal access.", path)
-		return false, errors.New(msg)
+// isUnderProc checks whether the literal cleaned path is under /proc.
+func isUnderProc(cleaned string) bool {
+	return cleaned == "/proc" || strings.HasPrefix(cleaned, "/proc/")
+}
+
+// isUnderPATH checks whether the resolved path falls under any PATH directory.
+func isUnderPATH(resolved string) (string, bool) {
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		return "", false
 	}
-	if strings.Contains(path, "./") || strings.Contains(path, "/.") {
-		msg = msg + fmt.Sprintf("Path %s has illegal access.", path)
-		return false, errors.New(msg)
+	for _, dir := range filepath.SplitList(pathEnv) {
+		dir = filepath.Clean(dir)
+		if dir == "" || !filepath.IsAbs(dir) {
+			continue
+		}
+		if resolved == dir || strings.HasPrefix(resolved, dir+string(os.PathSeparator)) {
+			return dir, true
+		}
+	}
+	return "", false
+}
+
+// ValidatePath checks that path is a safe mount path.
+//
+// It requires the path to be absolute, then:
+//  1. Rejects paths literally under /proc (even if symlinks resolve elsewhere).
+//  2. Resolves symlinks and rejects paths whose real location is under a PATH directory.
+//
+// Note: the kubelet root dir containment check is done by the caller.
+func ValidatePath(path string) (bool, error) {
+	if !filepath.IsAbs(path) {
+		return false, fmt.Errorf("path %s must be an absolute path", path)
+	}
+
+	cleaned := filepath.Clean(path)
+	if isUnderProc(cleaned) {
+		return false, fmt.Errorf("path %s is under sensitive path /proc", path)
+	}
+
+	// Resolve symlinks (EvalSymlinks calls Clean internally).
+	// If the path doesn't exist yet, fall back to the cleaned literal path.
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		resolved = cleaned
+	}
+
+	// Also reject symlinks that resolve into /proc.
+	if isUnderProc(resolved) {
+		return false, fmt.Errorf("path %s is under sensitive path /proc", path)
+	}
+
+	if dir, ok := isUnderPATH(resolved); ok {
+		return false, fmt.Errorf("path %s is under PATH directory %s", path, dir)
 	}
 
 	return true, nil
