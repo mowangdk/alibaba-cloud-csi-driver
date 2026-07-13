@@ -574,24 +574,18 @@ func (ad *DiskAttachDetach) waitForDiskAttached(ctx context.Context, diskID, nod
 	if err != nil {
 		return nil, err
 	}
-	if disk == nil {
-		return nil, fmt.Errorf("waitForDiskAttached: disk %s not found", diskID)
-	}
 	return disk, nil
 }
 
 func (ad *DiskAttachDetach) waitForDiskDetached(ctx context.Context, diskID, nodeID string) error {
-	disk, err := ad.waiter.WaitFor(ctx, diskID, func(disk *ecs.Disk) bool {
+	_, err := ad.waiter.WaitFor(ctx, diskID, func(disk *ecs.Disk) bool {
 		return !waitstatus.IsInstanceAttached(disk, nodeID)
 	})
-	if err != nil {
-		return err
-	}
-	if disk == nil {
+	if errors.Is(err, waitstatus.ErrNotFound) {
 		klog.Infof("waitForDiskDetached: disk %s not found", diskID)
 		return nil
 	}
-	return nil
+	return err
 }
 
 func (ad *DiskAttachDetach) findDiskByID(ctx context.Context, diskID string) (*ecs.Disk, error) {

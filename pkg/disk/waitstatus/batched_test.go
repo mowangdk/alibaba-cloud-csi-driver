@@ -57,11 +57,12 @@ func TestPoll(t *testing.T) {
 			continue
 		}
 		resp := <-req.resultChan
-		assert.NoError(t, resp.err)
 		if i < 5 {
+			assert.NoError(t, resp.err)
 			expectedID := fmt.Sprintf("d%d", i)
 			assert.Equal(t, expectedID, resp.res.DiskId)
 		} else {
+			assert.ErrorIs(t, resp.err, ErrNotFound)
 			assert.Nil(t, resp.res)
 		}
 	}

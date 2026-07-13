@@ -5,6 +5,7 @@ package waitstatus
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
@@ -13,6 +14,9 @@ import (
 const (
 	pollInterval = 2 * time.Second
 )
+
+// ErrNotFound is returned by WaitFor when the resource does not exist.
+var ErrNotFound = errors.New("waitstatus: resource not found")
 
 type StatusWaiter[T any] interface {
 	// WaitFor waits until the pred returns true for the specified id.
