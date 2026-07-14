@@ -38,12 +38,12 @@ jobs:
       - name: Run tests with coverage (PR)
         if: github.event_name == 'pull_request' && steps.changed.outputs.skip != 'true'
         run: |
-          go test -coverprofile=coverage.out -covermode=atomic ${{ steps.changed.outputs.packages }}
+          sudo -E env "PATH=$PATH" go test -coverprofile=coverage.out -covermode=atomic ${{ steps.changed.outputs.packages }}
 
       - name: Run tests with coverage (push to master)
         if: github.event_name == 'push'
         run: |
-          go test -coverprofile=coverage.out -covermode=atomic ./...
+          sudo -E env "PATH=$PATH" go test -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Report coverage
         if: steps.changed.outputs.skip != 'true' || github.event_name == 'push'
