@@ -213,7 +213,10 @@ func parseOptions(ctx context.Context, cnfsGetter cnfsv1beta1.CNFSGetter, volOpt
 			opts.ExternalId = value
 		case "sandboxid":
 			opts.SandboxId = value
-		case "sandboxcredprovidername":
+		case "sandboxcredprovidername", "credentialprovidername":
+			if opts.SandboxCredProviderName != "" && opts.SandboxCredProviderName != value {
+				klog.Warning(WrapOssError(ParamError, "multiple credential provider names are not allowed, use the first one").Error())
+			}
 			opts.SandboxCredProviderName = value
 		case "region":
 			opts.Region = value

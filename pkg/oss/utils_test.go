@@ -2073,3 +2073,155 @@ func TestNeedRotateToken(t *testing.T) {
 		})
 	}
 }
+
+func TestParseOptions_SandboxCredProviderName(t *testing.T) {
+	tests := []struct {
+		name             string
+		volOptions       map[string]string
+		wantCredProvider string
+		wantCredAny      []string // when set, asserts result is one of these (non-deterministic map iteration)
+		wantSandboxId    string
+	}{
+		{
+			name: "sandboxcredprovidername sets SandboxCredProviderName",
+			volOptions: map[string]string{
+				"sandboxcredprovidername": "aliyun-one",
+			},
+			wantCredProvider: "aliyun-one",
+		},
+		{
+			name: "credentialprovidername is an alias for sandboxcredprovidername",
+			volOptions: map[string]string{
+				"credentialprovidername": "aliyun-one",
+			},
+			wantCredProvider: "aliyun-one",
+		},
+		{
+			name: "mixed-case key is lowercased",
+			volOptions: map[string]string{
+				"SandboxCredProviderName": "aliyun-one",
+			},
+			wantCredProvider: "aliyun-one",
+		},
+		{
+			name: "uppercase key is lowercased",
+			volOptions: map[string]string{
+				"CREDENTIALPROVIDERNAME": "aliyun-one",
+			},
+			wantCredProvider: "aliyun-one",
+		},
+		{
+			name: "whitespace in key is trimmed",
+			volOptions: map[string]string{
+				"  sandboxcredprovidername  ": "aliyun-one",
+			},
+			wantCredProvider: "aliyun-one",
+		},
+		{
+			name: "whitespace in value is trimmed",
+			volOptions: map[string]string{
+				"sandboxcredprovidername": "  aliyun-one  ",
+			},
+			wantCredProvider: "aliyun-one",
+		},
+		{
+			name: "empty value is ignored",
+			volOptions: map[string]string{
+				"sandboxcredprovidername": "",
+			},
+			wantCredProvider: "",
+		},
+		{
+			name: "whitespace-only value is ignored",
+			volOptions: map[string]string{
+				"sandboxcredprovidername": "   ",
+			},
+			wantCredProvider: "",
+		},
+		{
+			name: "sandboxid sets SandboxId",
+			volOptions: map[string]string{
+				"sandboxid": "sandbox-123",
+			},
+			wantSandboxId: "sandbox-123",
+		},
+		{
+			name: "sandboxid and sandboxcredprovidername together",
+			volOptions: map[string]string{
+				"sandboxid":               "sandbox-123",
+				"sandboxcredprovidername": "aliyun-one",
+			},
+			wantCredProvider: "aliyun-one",
+			wantSandboxId:    "sandbox-123",
+		},
+		{
+			name: "sandboxid and credentialprovidername together",
+			volOptions: map[string]string{
+				"sandboxid":              "sandbox-456",
+				"credentialprovidername": "cred-provider-x",
+			},
+			wantCredProvider: "cred-provider-x",
+			wantSandboxId:    "sandbox-456",
+		},
+		{
+			name:             "neither set leaves both empty",
+			volOptions:       map[string]string{},
+			wantCredProvider: "",
+			wantSandboxId:    "",
+		},
+		{
+			name: "value with special characters",
+			volOptions: map[string]string{
+				"sandboxcredprovidername": "my-provider_1.0",
+			},
+			wantCredProvider: "my-provider_1.0",
+		},
+		{
+			name: "both sandboxcredprovidername and credentialprovidername — non-deterministic",
+			volOptions: map[string]string{
+				"sandboxcredprovidername": "provider-a",
+				"credentialprovidername":  "provider-b",
+			},
+			// Map iteration order is non-deterministic; either value may win.
+			// The duplicate detection logs a warning and overwrites with the last-processed value.
+			wantCredAny: []string{"provider-a", "provider-b"},
+		},
+		{
+			name: "both keys with same value — no ambiguity",
+			volOptions: map[string]string{
+				"sandboxcredprovidername": "same-provider",
+				"credentialprovidername":  "same-provider",
+			},
+			wantCredProvider: "same-provider",
+		},
+		{
+			name: "both keys with same value but different whitespace — no warning after trim",
+			volOptions: map[string]string{
+				"sandboxcredprovidername": "  same-provider  ",
+				"credentialprovidername":  "same-provider",
+			},
+			// Both trim to "same-provider"; the != value check prevents a spurious warning.
+			wantCredProvider: "same-provider",
+		},
+		{
+			name: "duplicate detection: empty first then non-empty second",
+			volOptions: map[string]string{
+				"sandboxcredprovidername": "",
+				"credentialprovidername":  "from-alias",
+			},
+			// Empty value is skipped (continue), so no duplicate warning.
+			wantCredProvider: "from-alias",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := mustParseOptions(t, tt.volOptions, nil, nil, false, "", false, m)
+			if len(tt.wantCredAny) > 0 {
+				assert.Contains(t, tt.wantCredAny, opts.SandboxCredProviderName)
+			} else {
+				assert.Equal(t, tt.wantCredProvider, opts.SandboxCredProviderName)
+			}
+			assert.Equal(t, tt.wantSandboxId, opts.SandboxId)
+		})
+	}
+}
