@@ -22,7 +22,7 @@ func TestGetPluginCapabilities(t *testing.T) {
 		{
 			name:                       "volume group snapshots disabled",
 			enableVolumeGroupSnapshots: false,
-			expectedCapCount:           3, // CONTROLLER_SERVICE, VOLUME_ACCESSIBILITY_CONSTRAINTS, OFFLINE expansion
+			expectedCapCount:           3, // CONTROLLER_SERVICE, VOLUME_ACCESSIBILITY_CONSTRAINTS, ONLINE expansion
 			expectGroupControllerCap:   false,
 		},
 		{
@@ -48,7 +48,7 @@ func TestGetPluginCapabilities(t *testing.T) {
 			// Verify expected capabilities
 			hasControllerService := false
 			hasVolumeAccessibility := false
-			hasOfflineExpansion := false
+			hasOnlineExpansion := false
 			hasGroupController := false
 
 			for _, cap := range resp.Capabilities {
@@ -63,15 +63,15 @@ func TestGetPluginCapabilities(t *testing.T) {
 					}
 				}
 				if exp := cap.GetVolumeExpansion(); exp != nil {
-					if exp.Type == csi.PluginCapability_VolumeExpansion_OFFLINE {
-						hasOfflineExpansion = true
+					if exp.Type == csi.PluginCapability_VolumeExpansion_ONLINE {
+						hasOnlineExpansion = true
 					}
 				}
 			}
 
 			assert.True(t, hasControllerService, "should have CONTROLLER_SERVICE capability")
 			assert.True(t, hasVolumeAccessibility, "should have VOLUME_ACCESSIBILITY_CONSTRAINTS capability")
-			assert.True(t, hasOfflineExpansion, "should have OFFLINE volume expansion capability")
+			assert.True(t, hasOnlineExpansion, "should have ONLINE volume expansion capability")
 			assert.Equal(t, tt.expectGroupControllerCap, hasGroupController, "GROUP_CONTROLLER_SERVICE capability mismatch")
 		})
 	}
