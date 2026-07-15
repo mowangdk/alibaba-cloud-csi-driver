@@ -117,13 +117,13 @@ images:
   registryVPC: null
   controller:
     repo: acs/csi-plugin
-    tag: "v1.35.3"
+    tag: "v1.36.2"
   plugin:
     repo: acs/csi-plugin
-    tag: "v1.35.3"
+    tag: "v1.36.2"
   pluginInit:
     repo: acs/csi-plugin
-    tag: "v1.35.3-init"
+    tag: "v1.36.2-init"
   localController:
     repo: acs/local-csi-driver
     tag: "v0.2.1"
