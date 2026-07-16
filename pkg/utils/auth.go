@@ -17,9 +17,9 @@ limitations under the License.
 package utils
 
 import (
-	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -72,16 +72,79 @@ type AccessControl struct {
 	UseMode         AccessControlMode
 }
 
-// ValidatePath is check path string is valid
-func ValidatePath(path string) (bool, error) {
-	var msg string
-	if strings.Contains(path, "../") || strings.Contains(path, "/..") || strings.Contains(path, "..") {
-		msg = msg + fmt.Sprintf("Path %s has illegal access.", path)
-		return false, errors.New(msg)
+// isUnderProc checks whether the literal cleaned path is under /proc.
+func isUnderProc(cleaned string) bool {
+	return cleaned == "/proc" || strings.HasPrefix(cleaned, "/proc/")
+}
+
+// isUnderPATH checks whether the resolved path falls under any PATH directory.
+func isUnderPATH(resolved string) (string, bool) {
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		return "", false
 	}
-	if strings.Contains(path, "./") || strings.Contains(path, "/.") {
-		msg = msg + fmt.Sprintf("Path %s has illegal access.", path)
-		return false, errors.New(msg)
+	for _, dir := range filepath.SplitList(pathEnv) {
+		dir = filepath.Clean(dir)
+		if dir == "" || !filepath.IsAbs(dir) {
+			continue
+		}
+		if resolved == dir || strings.HasPrefix(resolved, dir+string(os.PathSeparator)) {
+			return dir, true
+		}
+	}
+	return "", false
+}
+
+// resolveSymlinks resolves symlinks for cleaned, tolerating a non-existent leaf.
+// It first tries to resolve the full path (handles the case where the leaf
+// exists, including a leaf that is itself a symlink). If that fails because the
+// leaf does not exist yet, it resolves the parent directory once (which is
+// expected to exist for a mount path) and re-appends the final component, so a
+// symlinked parent still cannot bypass the sensitive-path checks. If the parent
+// directory itself cannot be resolved, it returns an error.
+func resolveSymlinks(cleaned string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		return resolved, nil
+	}
+	resolvedDir, err := filepath.EvalSymlinks(filepath.Dir(cleaned))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolvedDir, filepath.Base(cleaned)), nil
+}
+
+// ValidatePath checks that path is a safe mount path.
+//
+// It requires the path to be absolute, then:
+//  1. Rejects paths literally under /proc (even if symlinks resolve elsewhere).
+//  2. Resolves symlinks and rejects paths whose real location is under a PATH directory.
+//
+// Note: the kubelet root dir containment check is done by the caller.
+func ValidatePath(path string) (bool, error) {
+	if !filepath.IsAbs(path) {
+		return false, fmt.Errorf("path %s must be an absolute path", path)
+	}
+
+	cleaned := filepath.Clean(path)
+	if isUnderProc(cleaned) {
+		return false, fmt.Errorf("path %s is under sensitive path /proc", path)
+	}
+
+	// Resolve symlinks. When the leaf does not exist yet, the parent directory
+	// is resolved instead, so symlinks in parent directories are still followed
+	// and cannot be used to bypass the sensitive-path checks below.
+	resolved, err := resolveSymlinks(cleaned)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve symlinks for path %s: %w", path, err)
+	}
+
+	// Also reject symlinks that resolve into /proc.
+	if isUnderProc(resolved) {
+		return false, fmt.Errorf("path %s is under sensitive path /proc", path)
+	}
+
+	if dir, ok := isUnderPATH(resolved); ok {
+		return false, fmt.Errorf("path %s is under PATH directory %s", path, dir)
 	}
 
 	return true, nil
