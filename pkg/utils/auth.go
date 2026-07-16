@@ -95,6 +95,24 @@ func isUnderPATH(resolved string) (string, bool) {
 	return "", false
 }
 
+// resolveSymlinks resolves symlinks for cleaned, tolerating a non-existent leaf.
+// It first tries to resolve the full path (handles the case where the leaf
+// exists, including a leaf that is itself a symlink). If that fails because the
+// leaf does not exist yet, it resolves the parent directory once (which is
+// expected to exist for a mount path) and re-appends the final component, so a
+// symlinked parent still cannot bypass the sensitive-path checks. If the parent
+// directory itself cannot be resolved, it returns an error.
+func resolveSymlinks(cleaned string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		return resolved, nil
+	}
+	resolvedDir, err := filepath.EvalSymlinks(filepath.Dir(cleaned))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolvedDir, filepath.Base(cleaned)), nil
+}
+
 // ValidatePath checks that path is a safe mount path.
 //
 // It requires the path to be absolute, then:
@@ -112,11 +130,12 @@ func ValidatePath(path string) (bool, error) {
 		return false, fmt.Errorf("path %s is under sensitive path /proc", path)
 	}
 
-	// Resolve symlinks (EvalSymlinks calls Clean internally).
-	// If the path doesn't exist yet, fall back to the cleaned literal path.
-	resolved, err := filepath.EvalSymlinks(path)
+	// Resolve symlinks. When the leaf does not exist yet, the parent directory
+	// is resolved instead, so symlinks in parent directories are still followed
+	// and cannot be used to bypass the sensitive-path checks below.
+	resolved, err := resolveSymlinks(cleaned)
 	if err != nil {
-		resolved = cleaned
+		return false, fmt.Errorf("failed to resolve symlinks for path %s: %w", path, err)
 	}
 
 	// Also reject symlinks that resolve into /proc.

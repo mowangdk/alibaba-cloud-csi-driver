@@ -18,6 +18,7 @@ package utils
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,14 +27,14 @@ import (
 func TestGetAccessControl(t *testing.T) {
 	testAccessKey := "testkey"
 	testAccessKeySecret := "testvalue"
-	os.Setenv("ACCESS_KEY_ID", testAccessKey)
-	os.Setenv("ACCESS_KEY_SECRET", testAccessKeySecret)
+	t.Setenv("ACCESS_KEY_ID", testAccessKey)
+	t.Setenv("ACCESS_KEY_SECRET", testAccessKeySecret)
 	ac := GetAccessControl()
 	assert.Equal(t, testAccessKey, ac.AccessKeyID)
 	assert.Equal(t, testAccessKeySecret, ac.AccessKeySecret)
 	assert.Empty(t, ac.StsToken)
-	os.Unsetenv("ACCESS_KEY_ID")
-	os.Unsetenv("ACCESS_KEY_SECRET")
+	t.Setenv("ACCESS_KEY_ID", "")
+	t.Setenv("ACCESS_KEY_SECRET", "")
 	ac = GetAccessControl()
 	assert.Empty(t, ac.AccessKeyID)
 	assert.Empty(t, ac.AccessKeySecret)
@@ -41,35 +42,56 @@ func TestGetAccessControl(t *testing.T) {
 }
 
 func TestValidatePath(t *testing.T) {
+	// Resolve the temp dir so expected paths match what filepath.EvalSymlinks
+	// returns (on macOS /var is a symlink to /private/var).
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An existing nested directory to act as a valid, resolvable parent.
+	existingDir := filepath.Join(base, "pods", "uid", "volumes")
+	if err := os.MkdirAll(existingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A directory whose name contains "proc" to verify it is not treated as /proc.
+	procLikeDir := filepath.Join(base, "proc-data")
+	if err := os.MkdirAll(procLikeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
 		name    string
 		path    string
 		wantOK  bool
 		wantErr string
 	}{
-		// Valid paths under kubelet root
 		{
-			name:   "valid pod volume path",
-			path:   "/var/lib/kubelet/pods/uid/volumes/kubernetes.io~csi/pv/mount",
+			name:   "existing directory",
+			path:   existingDir,
 			wantOK: true,
 		},
 		{
-			name:   "valid plugin path",
-			path:   "/var/lib/kubelet/plugins/kubernetes.io/csi/pv/abc/globalmount",
+			name:   "non-existent leaf under existing parent",
+			path:   filepath.Join(existingDir, "mount"),
 			wantOK: true,
 		},
 		{
-			name:   "kubelet root dir itself",
-			path:   "/var/lib/kubelet",
+			name:   "base directory itself",
+			path:   base,
 			wantOK: true,
 		},
 		{
-			name:   "path directly under kubelet root",
-			path:   "/var/lib/kubelet/csi-plugins",
+			name:   "traversal within existing tree is cleaned",
+			path:   filepath.Join(existingDir, "..", ".."),
+			wantOK: true,
+		},
+		{
+			name:   "proc as non-prefix component is fine",
+			path:   filepath.Join(procLikeDir, "file"),
 			wantOK: true,
 		},
 
-		// Relative path is rejected before any further processing
+		// Relative path is rejected before any further processing.
 		{
 			name:    "relative path rejected",
 			path:    "var/lib/kubelet/pods/uid",
@@ -77,40 +99,7 @@ func TestValidatePath(t *testing.T) {
 			wantErr: "must be an absolute path",
 		},
 
-		// Path traversal (filepath.Clean resolves these)
-		{
-			name:   "dot-dot-slash traversal cleaned",
-			path:   "/var/lib/kubelet/../etc/passwd",
-			wantOK: true,
-		},
-		{
-			name:   "deep traversal cleaned",
-			path:   "/var/lib/kubelet/pods/../../etc",
-			wantOK: true,
-		},
-		{
-			name:   "bare double dot resolves to parent",
-			path:   "/var/lib/kubelet/..",
-			wantOK: true,
-		},
-		{
-			name:   "traversal that stays within root",
-			path:   "/var/lib/kubelet/pods/../plugins",
-			wantOK: true,
-		},
-		// dot-slash and slash-dot are cleaned to valid paths
-		{
-			name:   "dot-slash cleaned to valid path",
-			path:   "/var/lib/kubelet/./pods",
-			wantOK: true,
-		},
-		{
-			name:   "trailing dot cleaned to valid path",
-			path:   "/var/lib/kubelet/pods/.",
-			wantOK: true,
-		},
-
-		// Sensitive system path prefix (/proc)
+		// Sensitive system path prefix (/proc), caught on the literal path.
 		{
 			name:    "proc path rejected",
 			path:    "/proc/self/fd/0",
@@ -123,32 +112,13 @@ func TestValidatePath(t *testing.T) {
 			wantOK:  false,
 			wantErr: "under sensitive path /proc",
 		},
-		{
-			name:   "proc as non-prefix component is fine",
-			path:   "/var/lib/kubelet/pods/uid/proc-data/file",
-			wantOK: true,
-		},
 
-		// Paths outside kubelet root are allowed (kubelet root check is done elsewhere)
+		// A non-existent parent directory cannot be resolved -> error.
 		{
-			name:   "tmp directory",
-			path:   "/tmp/something",
-			wantOK: true,
-		},
-		{
-			name:   "home directory",
-			path:   "/home/user/data",
-			wantOK: true,
-		},
-		{
-			name:   "var but not kubelet",
-			path:   "/var/log/messages",
-			wantOK: true,
-		},
-		{
-			name:   "mnt directory",
-			path:   "/mnt/data",
-			wantOK: true,
+			name:    "non-existent parent returns error",
+			path:    filepath.Join(base, "missing-parent", "leaf"),
+			wantOK:  false,
+			wantErr: "failed to resolve symlinks",
 		},
 	}
 
@@ -166,28 +136,99 @@ func TestValidatePath(t *testing.T) {
 }
 
 func TestValidatePath_PATHDirs(t *testing.T) {
-	origPath := os.Getenv("PATH")
-	defer func() { _ = os.Setenv("PATH", origPath) }()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(base, "bin")
+	otherDir := filepath.Join(base, "data")
+	prefixDir := filepath.Join(base, "binary") // shares a prefix with binDir
+	for _, d := range []string{binDir, otherDir, prefixDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	_ = os.Setenv("PATH", "/usr/bin:/usr/sbin:/usr/local/bin")
+	t.Setenv("PATH", binDir)
 
-	// Path under a PATH directory is rejected.
-	ok, err := ValidatePath("/usr/bin/ls")
+	// Path under a PATH directory is rejected (leaf need not exist).
+	ok, err := ValidatePath(filepath.Join(binDir, "ls"))
 	assert.False(t, ok)
 	assert.ErrorContains(t, err, "under PATH directory")
 
 	// PATH directory itself is rejected.
-	ok, err = ValidatePath("/usr/sbin")
+	ok, err = ValidatePath(binDir)
 	assert.False(t, ok)
 	assert.ErrorContains(t, err, "under PATH directory")
 
 	// Path not under any PATH directory is allowed.
-	ok, err = ValidatePath("/var/lib/data")
+	ok, err = ValidatePath(filepath.Join(otherDir, "file"))
 	assert.True(t, ok)
 	assert.NoError(t, err)
 
 	// Path that shares a prefix but is not actually under a PATH dir.
-	ok, err = ValidatePath("/usr/binary/file")
+	ok, err = ValidatePath(filepath.Join(prefixDir, "file"))
 	assert.True(t, ok)
 	assert.NoError(t, err)
+}
+
+func TestValidatePath_Symlinks(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sensitiveDir := filepath.Join(base, "sensitive")
+	safeDir := filepath.Join(base, "safe")
+	for _, d := range []string{sensitiveDir, safeDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Setenv("PATH", sensitiveDir)
+
+	// A symlinked parent that resolves into a PATH dir must be rejected, even
+	// though the literal path is not under the PATH dir. The leaf does not exist.
+	parentLink := filepath.Join(base, "parent-link")
+	if err := os.Symlink(sensitiveDir, parentLink); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := ValidatePath(filepath.Join(parentLink, "leaf"))
+	assert.False(t, ok)
+	assert.ErrorContains(t, err, "under PATH directory")
+
+	// A leaf that is itself a symlink into a PATH dir must be rejected.
+	leafLink := filepath.Join(base, "leaf-link")
+	if err := os.Symlink(sensitiveDir, leafLink); err != nil {
+		t.Fatal(err)
+	}
+	ok, err = ValidatePath(leafLink)
+	assert.False(t, ok)
+	assert.ErrorContains(t, err, "under PATH directory")
+
+	// A symlinked parent that resolves into a safe dir is allowed.
+	safeLink := filepath.Join(base, "safe-link")
+	if err := os.Symlink(safeDir, safeLink); err != nil {
+		t.Fatal(err)
+	}
+	ok, err = ValidatePath(filepath.Join(safeLink, "leaf"))
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestValidatePath_SymlinkIntoProc(t *testing.T) {
+	if _, err := os.Stat("/proc"); err != nil {
+		t.Skip("/proc not available on this platform")
+	}
+	base := t.TempDir()
+
+	// A symlink whose target resolves into /proc must be rejected, even though
+	// the literal path is not under /proc.
+	procLink := filepath.Join(base, "proc-link")
+	if err := os.Symlink("/proc", procLink); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := ValidatePath(filepath.Join(procLink, "self"))
+	assert.False(t, ok)
+	assert.ErrorContains(t, err, "under sensitive path /proc")
 }
