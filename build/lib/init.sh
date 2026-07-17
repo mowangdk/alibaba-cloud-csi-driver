@@ -83,6 +83,12 @@ do
                 echo "Running bmcpfs plugin...."
                 host_cmd modprobe fuse
                 echo "modprobe fuse returned: $?"
+                if grep -q fuse_dev_ioctl_recover /proc/kallsyms; then
+                    echo "fuse_dev_ioctl_recover found in kernel, fuse connection recovery supported"
+                else
+                    echo "ERROR: fuse_dev_ioctl_recover not found in kernel, fuse connection recovery not supported"
+                    exit 1
+                fi
             elif [ "$driver_type" = "pov" ]; then
                 echo "Running pov plugin...."
                 run_pov="true"

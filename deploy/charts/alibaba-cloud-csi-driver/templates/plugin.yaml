@@ -54,7 +54,7 @@ spec:
       hostIPC: true
       hostPID: true
       dnsPolicy: ClusterFirst
-{{- if and (ne $nodePool.deploy.nodeInit false) (or $nodePool.csi.nas.enabled $nodePool.csi.oss.enabled (eq $nodePool.deploy.nodeInit true)) }}
+{{- if and (ne $nodePool.deploy.nodeInit false) (or $nodePool.csi.nas.enabled $nodePool.csi.oss.enabled $nodePool.csi.bmcpfs.enabled (eq $nodePool.deploy.nodeInit true)) }}
       initContainers:
         - name: init
           image: {{ include "imageSpec" (list $nodePool "pluginInit") }}
