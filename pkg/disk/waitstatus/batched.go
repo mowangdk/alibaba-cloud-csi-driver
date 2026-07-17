@@ -133,7 +133,12 @@ func (w *Batched[T]) got(t time.Time, id string, resource *T, requestID string) 
 			return true
 		}
 		logger := klog.FromContext(r.ctx)
-		if resource == nil || r.pred(resource) {
+		if resource == nil {
+			logger.V(4).Info("resource not found", "type", w.ecsClient.Type(), "requestID", requestID)
+			r.resultChan <- waitResponse[*T]{err: ErrNotFound}
+			return true
+		}
+		if r.pred(resource) {
 			logger.V(4).Info("reached desired status", "type", w.ecsClient.Type(), "requestID", requestID)
 			r.resultChan <- waitResponse[*T]{res: resource}
 			return true

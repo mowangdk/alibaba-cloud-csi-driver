@@ -103,7 +103,7 @@ func TestWaitForCancel(t *testing.T) {
 func TestWaitForUnfound(t *testing.T) {
 	testEachImpl(t, clock.RealClock{}, func(t *testing.T, client *testdesc.FakeClient, waiter StatusWaiter[ecs.Disk]) {
 		disk, err := waiter.WaitFor(context.Background(), "d1", isNextStatus("Attaching", "i1"))
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNotFound)
 		assert.Nil(t, disk)
 	})
 }

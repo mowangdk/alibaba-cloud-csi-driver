@@ -29,7 +29,7 @@ func (w *Simple[T]) WaitFor(ctx context.Context, id string, pred StatusPredicate
 			return nil, err
 		}
 		if len(resp.Resources) == 0 {
-			return nil, nil
+			return nil, ErrNotFound
 		}
 		if len(resp.Resources) > 1 {
 			return nil, errors.New("too many resources returned")
