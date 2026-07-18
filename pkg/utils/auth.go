@@ -95,22 +95,33 @@ func isUnderPATH(resolved string) (string, bool) {
 	return "", false
 }
 
-// resolveSymlinks resolves symlinks for cleaned, tolerating a non-existent leaf.
-// It first tries to resolve the full path (handles the case where the leaf
-// exists, including a leaf that is itself a symlink). If that fails because the
-// leaf does not exist yet, it resolves the parent directory once (which is
-// expected to exist for a mount path) and re-appends the final component, so a
-// symlinked parent still cannot bypass the sensitive-path checks. If the parent
-// directory itself cannot be resolved, it returns an error.
+// resolveSymlinks resolves symlinks for cleaned, tolerating non-existent
+// trailing components. It first tries to resolve the full path. Only when
+// that fails because the path does not exist yet does it recursively resolve
+// the parent directory, then re-append the missing trailing component, so the
+// result is the resolved deepest existing ancestor joined with the full
+// non-existent suffix. Symlinks in any existing ancestor directory are still
+// followed and cannot be used to bypass the sensitive-path checks. Any
+// resolution error other than non-existence is returned as-is, and an error
+// is also returned if no ancestor up to the root can be resolved.
 func resolveSymlinks(cleaned string) (string, error) {
-	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err == nil {
 		return resolved, nil
 	}
-	resolvedDir, err := filepath.EvalSymlinks(filepath.Dir(cleaned))
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	parent := filepath.Dir(cleaned)
+	if parent == cleaned {
+		// Reached the root without resolving any ancestor.
+		return "", fmt.Errorf("cannot resolve any ancestor of %s", cleaned)
+	}
+	resolvedParent, err := resolveSymlinks(parent)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(resolvedDir, filepath.Base(cleaned)), nil
+	return filepath.Join(resolvedParent, filepath.Base(cleaned)), nil
 }
 
 // ValidatePath checks that path is a safe mount path.
@@ -130,9 +141,10 @@ func ValidatePath(path string) (bool, error) {
 		return false, fmt.Errorf("path %s is under sensitive path /proc", path)
 	}
 
-	// Resolve symlinks. When the leaf does not exist yet, the parent directory
-	// is resolved instead, so symlinks in parent directories are still followed
-	// and cannot be used to bypass the sensitive-path checks below.
+	// Resolve symlinks. When trailing components do not exist yet, the
+	// deepest existing ancestor directory is resolved and the non-existent
+	// suffix is re-appended, so symlinks in ancestor directories are still
+	// followed and cannot be used to bypass the sensitive-path checks below.
 	resolved, err := resolveSymlinks(cleaned)
 	if err != nil {
 		return false, fmt.Errorf("failed to resolve symlinks for path %s: %w", path, err)

@@ -58,6 +58,12 @@ func TestValidatePath(t *testing.T) {
 	if err := os.MkdirAll(procLikeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A regular file to verify that resolution errors other than non-existence
+	// are propagated instead of triggering the parent recursion.
+	regularFile := filepath.Join(t.TempDir(), "regular-file")
+	if err := os.WriteFile(regularFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name    string
@@ -113,10 +119,19 @@ func TestValidatePath(t *testing.T) {
 			wantErr: "under sensitive path /proc",
 		},
 
-		// A non-existent parent directory cannot be resolved -> error.
+		// Multiple non-existent trailing components are resolved by walking up
+		// to the deepest existing ancestor, so the path is still validated.
 		{
-			name:    "non-existent parent returns error",
-			path:    filepath.Join(base, "missing-parent", "leaf"),
+			name:   "multiple non-existent components resolve via ancestor",
+			path:   filepath.Join(base, "missing-parent", "leaf"),
+			wantOK: true,
+		},
+
+		// A path through a regular file fails resolution with a non-ENOENT
+		// error, which is propagated instead of recursing into the parent.
+		{
+			name:    "path through regular file returns error",
+			path:    filepath.Join(regularFile, "leaf"),
 			wantOK:  false,
 			wantErr: "failed to resolve symlinks",
 		},
@@ -197,6 +212,13 @@ func TestValidatePath_Symlinks(t *testing.T) {
 	assert.False(t, ok)
 	assert.ErrorContains(t, err, "under PATH directory")
 
+	// A multi-level missing path through a symlinked ancestor must also be
+	// rejected: the recursion resolves the ancestor and re-appends the full
+	// non-existent suffix before the PATH check runs.
+	ok, err = ValidatePath(filepath.Join(parentLink, "missing1", "missing2"))
+	assert.False(t, ok)
+	assert.ErrorContains(t, err, "under PATH directory")
+
 	// A leaf that is itself a symlink into a PATH dir must be rejected.
 	leafLink := filepath.Join(base, "leaf-link")
 	if err := os.Symlink(sensitiveDir, leafLink); err != nil {
@@ -231,4 +253,45 @@ func TestValidatePath_SymlinkIntoProc(t *testing.T) {
 	ok, err := ValidatePath(filepath.Join(procLink, "self"))
 	assert.False(t, ok)
 	assert.ErrorContains(t, err, "under sensitive path /proc")
+}
+
+func TestResolveSymlinks(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(base, "existing")
+	if err := os.MkdirAll(existing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// An existing path without any symlink resolves to itself.
+	got, err := resolveSymlinks(existing)
+	assert.NoError(t, err)
+	assert.Equal(t, existing, got)
+
+	// A symlinked ancestor is resolved and the full non-existent suffix is
+	// re-appended: link -> existing, so link/a/b resolves to existing/a/b.
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(existing, link); err != nil {
+		t.Fatal(err)
+	}
+	got, err = resolveSymlinks(filepath.Join(link, "a", "b"))
+	assert.NoError(t, err)
+	assert.Equal(t, filepath.Join(existing, "a", "b"), got)
+
+	// A leaf that is itself a symlink resolves to its target.
+	got, err = resolveSymlinks(link)
+	assert.NoError(t, err)
+	assert.Equal(t, existing, got)
+
+	// A path through a regular file fails with a non-ENOENT error, which must
+	// be propagated instead of triggering the parent recursion.
+	regularFile := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(regularFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = resolveSymlinks(filepath.Join(regularFile, "leaf"))
+	assert.Error(t, err)
+	assert.Empty(t, got)
 }
