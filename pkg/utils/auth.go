@@ -115,7 +115,7 @@ func resolveSymlinks(cleaned string) (string, error) {
 	parent := filepath.Dir(cleaned)
 	if parent == cleaned {
 		// Reached the root without resolving any ancestor.
-		return "", fmt.Errorf("cannot resolve any ancestor of %s", cleaned)
+		return "", fmt.Errorf("cannot resolve any ancestor of %s: %w", cleaned, err)
 	}
 	resolvedParent, err := resolveSymlinks(parent)
 	if err != nil {
