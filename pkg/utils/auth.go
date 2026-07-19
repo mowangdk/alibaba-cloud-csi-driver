@@ -126,7 +126,13 @@ func resolveSymlinks(cleaned string) (string, error) {
 
 // ValidatePath checks that path is a safe mount path.
 //
-// It requires the path to be absolute, then:
+// It requires the path to be absolute and canonical, i.e. equal to its
+// filepath.Clean form with no "." or ".." components, redundant separators,
+// or trailing slashes. The canonical requirement ensures the path checked
+// here is exactly the one later resolved by the kernel: in a non-canonical
+// path the kernel resolves ".." after following symlinks, so if a component
+// before ".." were a symlink, the mount target would escape the
+// lexically-cleaned path that is validated. It then:
 //  1. Rejects paths literally under /proc (even if symlinks resolve elsewhere).
 //  2. Resolves symlinks and rejects paths whose real location is under a PATH directory.
 //
@@ -137,6 +143,9 @@ func ValidatePath(path string) (bool, error) {
 	}
 
 	cleaned := filepath.Clean(path)
+	if path != cleaned {
+		return false, fmt.Errorf("path %s is not canonical (expected %s)", path, cleaned)
+	}
 	if isUnderProc(cleaned) {
 		return false, fmt.Errorf("path %s is under sensitive path /proc", path)
 	}
