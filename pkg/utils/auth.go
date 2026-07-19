@@ -126,9 +126,13 @@ func resolveSymlinks(cleaned string) (string, error) {
 
 // ValidatePath checks that path is a safe mount path.
 //
-// It requires the path to be absolute, then:
-//  1. Rejects paths literally under /proc (even if symlinks resolve elsewhere).
-//  2. Resolves symlinks and rejects paths whose real location is under a PATH directory.
+// It requires the path to be absolute and free of ".." components. Rejecting
+// ".." prevents symlink-traversal exploits: the kernel resolves ".." *after*
+// following symlinks, so a path like "/symlink/../etc/passwd" would escape the
+// lexically-cleaned path that is validated. It then:
+//  1. Rejects paths literally under /proc (entries may not be resolvable).
+//  2. Resolves symlinks and rejects paths whose real location is under /proc.
+//  3. Resolves symlinks and rejects paths whose real location is under a PATH directory.
 //
 // Note: the kubelet root dir containment check is done by the caller.
 func ValidatePath(path string) (bool, error) {
@@ -136,8 +140,16 @@ func ValidatePath(path string) (bool, error) {
 		return false, fmt.Errorf("path %s must be an absolute path", path)
 	}
 
-	cleaned := filepath.Clean(path)
-	if isUnderProc(cleaned) {
+	for _, seg := range strings.Split(path, "/") {
+		if seg == ".." {
+			return false, fmt.Errorf("path %s contains '..' which is not allowed", path)
+		}
+	}
+
+	// Reject paths literally under /proc before resolution, because /proc
+	// entries (e.g. fd/N) may resolve to non-filesystem targets that
+	// EvalSymlinks cannot handle.
+	if isUnderProc(path) {
 		return false, fmt.Errorf("path %s is under sensitive path /proc", path)
 	}
 
@@ -145,7 +157,7 @@ func ValidatePath(path string) (bool, error) {
 	// deepest existing ancestor directory is resolved and the non-existent
 	// suffix is re-appended, so symlinks in ancestor directories are still
 	// followed and cannot be used to bypass the sensitive-path checks below.
-	resolved, err := resolveSymlinks(cleaned)
+	resolved, err := resolveSymlinks(path)
 	if err != nil {
 		return false, fmt.Errorf("failed to resolve symlinks for path %s: %w", path, err)
 	}

@@ -86,14 +86,59 @@ func TestValidatePath(t *testing.T) {
 			path:   base,
 			wantOK: true,
 		},
+		// ".." (or any non-canonical form) is rejected up front: the kernel
+		// resolves ".." after following symlinks, so tolerating it would let a
+		// symlinked component redirect the mount target away from the
+		// lexically-cleaned path that is validated.
 		{
-			name:   "traversal within existing tree is cleaned",
-			path:   filepath.Join(existingDir, "..", ".."),
+			// Note: string concatenation, not filepath.Join, which would
+			// clean the path and hide the traversal.
+			name:    "traversal within existing tree is rejected",
+			path:    existingDir + "/../..",
+			wantOK:  false,
+			wantErr: "contains '..'",
+		},
+		{
+			name:    "traversal crossing a potential symlink component is rejected",
+			path:    "/run/csi-mount/root/../usr/local/bin",
+			wantOK:  false,
+			wantErr: "contains '..'",
+		},
+		{
+			name:   "trailing slash is allowed",
+			path:   existingDir + "/",
 			wantOK: true,
 		},
 		{
 			name:   "proc as non-prefix component is fine",
 			path:   filepath.Join(procLikeDir, "file"),
+			wantOK: true,
+		},
+
+		// Hidden-directory-style components (".agent", "..agent") are ordinary
+		// path components: filepath.Clean only collapses exact "." and ".."
+		// components, so the canonical requirement must not filter legitimate
+		// cluster paths like /.agent/xx.
+		{
+			name:   "hidden root component is allowed",
+			path:   "/.agent/xx",
+			wantOK: true,
+		},
+		{
+			name:   "hidden component under existing tree is allowed",
+			path:   filepath.Join(existingDir, ".agent", "xx"),
+			wantOK: true,
+		},
+		{
+			name:   "dot-dot-prefixed component is not traversal",
+			path:   filepath.Join(existingDir, "..agent", "xx"),
+			wantOK: true,
+		},
+		{
+			// A "." component is harmless (kernel resolves it identically),
+			// so it is allowed. Note: string concatenation, not filepath.Join.
+			name:   "literal dot component is allowed",
+			path:   existingDir + "/./mount",
 			wantOK: true,
 		},
 
