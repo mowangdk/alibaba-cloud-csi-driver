@@ -107,8 +107,8 @@ ENTRYPOINT ["csi-mount-proxy-server", "--driver=ossfs2"]
 FROM alinux-install AS alinas
 
 ARG TARGETPLATFORM
-ARG ALINAS_UTILS_VERSION=2.4-0.20260630104844.fdf5ee.generic
-ARG EFC_VERSION=2.4-20260704165356.1bcf8d.cd7c66a.release
+ARG ALINAS_UTILS_VERSION=2.4-0.20260716211217.1eba09.generic
+ARG EFC_VERSION=2.4-20260715152610.afea64.3351f8b.release
 ARG ALINAS_RPM_BASE_URL=https://aliyun-alinas-eac.oss-cn-beijing.aliyuncs.com/efc-release/2.4
 
 RUN --mount=type=bind,from=rpm-builder,source=/root/rpmbuild/RPMS/noarch,target=/tmp/rpms \
@@ -146,8 +146,8 @@ ARG OSSFS_VERSION=v1.91.11.ack.1
 ARG OSSFS2_VERSION=v2.0.8.ack.1
 ARG OSSFS_RPM_URL
 ARG OSSFS2_RPM_URL
-ARG ALINAS_UTILS_VERSION=2.4-0.20260630104844.fdf5ee.generic
-ARG EFC_VERSION=2.4-20260704165356.1bcf8d.cd7c66a.release
+ARG ALINAS_UTILS_VERSION=2.4-0.20260716211217.1eba09.generic
+ARG EFC_VERSION=2.4-20260715152610.afea64.3351f8b.release
 ARG ALINAS_RPM_BASE_URL=https://aliyun-alinas-eac.oss-cn-beijing.aliyuncs.com/efc-release/2.4
 
 RUN --mount=type=bind,from=rpm-builder,source=/root/rpmbuild/RPMS/noarch,target=/tmp/rpms \
