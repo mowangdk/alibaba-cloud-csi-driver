@@ -83,10 +83,14 @@ do
                 echo "Running bmcpfs plugin...."
                 host_cmd modprobe fuse
                 echo "modprobe fuse returned: $?"
-                if grep -q fuse_dev_ioctl_recover /proc/kallsyms; then
-                    echo "fuse_dev_ioctl_recover found in kernel, fuse connection recovery supported"
+                # fuse connection recovery capability is exposed by an in-kernel symbol:
+                #   - fuse_dev_ioctl_recover  on alinux series and inner ubuntu
+                #   - fuse2_dev_ioctl_recover on outer (opensource) ubuntu
+                # as a fallback, the out-of-tree fuse2 module also provides it.
+                if grep -qE 'fuse_dev_ioctl_recover|fuse2_dev_ioctl_recover' /proc/kallsyms || host_cmd lsmod | grep -qw fuse2; then
+                    echo "fuse connection recovery supported"
                 else
-                    echo "ERROR: fuse_dev_ioctl_recover not found in kernel, fuse connection recovery not supported"
+                    echo "ERROR: fuse connection recovery not supported"
                     exit 1
                 fi
             elif [ "$driver_type" = "pov" ]; then
