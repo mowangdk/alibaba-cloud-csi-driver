@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,10 +141,8 @@ func ValidatePath(path string) (bool, error) {
 		return false, fmt.Errorf("path %s must be an absolute path", path)
 	}
 
-	for _, seg := range strings.Split(path, "/") {
-		if seg == ".." {
-			return false, fmt.Errorf("path %s contains '..' which is not allowed", path)
-		}
+	if slices.Contains(strings.Split(path, "/"), "..") {
+		return false, fmt.Errorf("path %s contains '..' which is not allowed", path)
 	}
 
 	// Reject paths literally under /proc before resolution, because /proc
