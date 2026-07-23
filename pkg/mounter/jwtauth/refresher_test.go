@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	mounterutils "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,8 +44,8 @@ func newTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	return srv
 }
 
-func newTestRefresher(tokenPath, endpoint, outputDir string) (*Refresher, *FileSink) {
-	sink := NewFileSink(outputDir)
+func newTestRefresher(tokenPath, endpoint string) (*Refresher, *fakeSink) {
+	sink := &fakeSink{}
 	return NewRefresher(Opts{
 		TokenFile:    tokenPath,
 		Endpoint:     endpoint,
@@ -55,15 +54,7 @@ func newTestRefresher(tokenPath, endpoint, outputDir string) (*Refresher, *FileS
 	}, sink), sink
 }
 
-// readCredFile reads a credential file through the rotation symlink dir.
-func readCredFile(t *testing.T, s *FileSink, key string) string {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(s.Dir(), key))
-	require.NoError(t, err)
-	return string(data)
-}
-
-func TestRefresher_SuccessfulFetchAndWrite(t *testing.T) {
+func TestRefresher_SuccessfulFetchAndApply(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := writeTokenFile(t, tmpDir, "test-token", "client-123")
 
@@ -91,19 +82,21 @@ func TestRefresher_SuccessfulFetchAndWrite(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	outputDir := filepath.Join(tmpDir, "creds")
-	refresher, sink := newTestRefresher(tokenPath, srv.URL, outputDir)
+	refresher, sink := newTestRefresher(tokenPath, srv.URL)
 
 	err := refresher.Start(context.Background())
 	require.NoError(t, err)
 	defer refresher.Stop()
 
-	assert.Equal(t, filepath.Join(outputDir, DataDirName), sink.Dir())
-
-	assert.Equal(t, "AKID-test", readCredFile(t, sink, mounterutils.KeyAccessKeyId))
-	assert.Equal(t, "AKSECRET-test", readCredFile(t, sink, mounterutils.KeyAccessKeySecret))
-	assert.Equal(t, "TOKEN-test", readCredFile(t, sink, mounterutils.KeySecurityToken))
-	assert.NotEmpty(t, readCredFile(t, sink, mounterutils.KeyExpiration))
+	// The initial credential must have been delivered through the sink.
+	require.Equal(t, 1, sink.appliedCount())
+	sink.mu.Lock()
+	got := sink.applied[0]
+	sink.mu.Unlock()
+	assert.Equal(t, "AKID-test", got.AccessKeyID)
+	assert.Equal(t, "AKSECRET-test", got.AccessKeySecret)
+	assert.Equal(t, "TOKEN-test", got.SecurityToken)
+	assert.NotEmpty(t, got.Expiration)
 }
 
 func TestRefresher_TokenFileErrors(t *testing.T) {
@@ -126,8 +119,7 @@ func TestRefresher_TokenFileErrors(t *testing.T) {
 			if tt.tokenData != "" {
 				require.NoError(t, os.WriteFile(tokenPath, []byte(tt.tokenData), 0600))
 			}
-			outputDir := filepath.Join(tmpDir, "creds-"+tt.name)
-			refresher, _ := newTestRefresher(tokenPath, "http://localhost:0", outputDir)
+			refresher, _ := newTestRefresher(tokenPath, "http://localhost:0")
 
 			err := refresher.Start(context.Background())
 			require.Error(t, err)
@@ -145,7 +137,7 @@ func TestRefresher_EndpointErrors(t *testing.T) {
 		_, _ = w.Write([]byte("internal error"))
 	})
 
-	refresher, _ := newTestRefresher(tokenPath, srv.URL, filepath.Join(tmpDir, "creds"))
+	refresher, _ := newTestRefresher(tokenPath, srv.URL)
 	err := refresher.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
@@ -159,7 +151,7 @@ func TestRefresher_NilSTSToken(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(credentialResponse{RequestID: "r1", STSToken: nil})
 	})
 
-	refresher, _ := newTestRefresher(tokenPath, srv.URL, filepath.Join(tmpDir, "creds"))
+	refresher, _ := newTestRefresher(tokenPath, srv.URL)
 	err := refresher.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil stsToken")
@@ -184,7 +176,7 @@ func TestRefresher_StopDuringRefresh(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	refresher, _ := newTestRefresher(tokenPath, srv.URL, filepath.Join(tmpDir, "creds"))
+	refresher, _ := newTestRefresher(tokenPath, srv.URL)
 	refresher.refreshMargin = 1 * time.Second
 
 	err := refresher.Start(context.Background())
@@ -199,7 +191,7 @@ func TestRefresher_StopDuringRefresh(t *testing.T) {
 	assert.Equal(t, finalCount, callCount.Load())
 }
 
-func TestRefresher_CleanupRemovesFiles(t *testing.T) {
+func TestRefresher_CleanupDelegatesToSink(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli")
 
@@ -213,18 +205,13 @@ func TestRefresher_CleanupRemovesFiles(t *testing.T) {
 		})
 	})
 
-	outputDir := filepath.Join(tmpDir, "creds")
-	refresher, sink := newTestRefresher(tokenPath, srv.URL, outputDir)
+	refresher, sink := newTestRefresher(tokenPath, srv.URL)
 	require.NoError(t, refresher.Start(context.Background()))
 	refresher.Stop()
 
-	_, err := os.Stat(sink.Dir())
-	require.NoError(t, err)
-
+	assert.Equal(t, 0, sink.cleanedCount())
 	refresher.Cleanup()
-
-	_, err = os.Stat(outputDir)
-	assert.True(t, os.IsNotExist(err))
+	assert.Equal(t, 1, sink.cleanedCount())
 }
 
 // fakeSink records applied credentials and cleanups for refresher tests that
@@ -256,6 +243,12 @@ func (s *fakeSink) appliedCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.applied)
+}
+
+func (s *fakeSink) cleanedCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cleaned
 }
 
 func TestRefresher_StartWithSkipsInitialApply(t *testing.T) {

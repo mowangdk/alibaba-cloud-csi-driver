@@ -57,11 +57,12 @@ var jwtAuthInfraOptionKeys = map[string]struct{}{
 // that use authType=jwtauth.
 //
 // It mirrors OssfsSecretInterceptor: before the mount it starts a background
-// credential refresher (jwtauth.Refresher with a FileSink) that exchanges the
-// sandbox jwtauth token for an STS token and writes the credential files
-// atomically to a per-mount directory. It rewrites op.Options so the
-// entrypoint receives only credentialDir (plus authType), and binds the
-// refresher lifetime to the mount process via OssfsMountResult.ExitChan.
+// credential refresher (jwtauth.Refresher with a file-based sink) that
+// exchanges the sandbox jwtauth token for an STS token and writes the
+// credential files atomically to a per-mount directory. It rewrites
+// op.Options so the entrypoint receives only credentialDir (plus authType),
+// and binds the refresher lifetime to the mount process via
+// OssfsMountResult.ExitChan.
 //
 // For any other authType (including the empty default) it is a no-op.
 func JWTAuthInterceptor(ctx context.Context, op *mounter.MountOperation, handler mounter.MountHandler) error {
@@ -90,7 +91,7 @@ func JWTAuthInterceptor(ctx context.Context, op *mounter.MountOperation, handler
 		// use a shared "default" directory.
 		return fmt.Errorf("jwtauth config error: neither volumeID nor sandboxId is set, cannot derive a unique credential directory")
 	}
-	sink := jwtauth.NewFileSink(filepath.Join(credentialBaseDir, volumeID))
+	sink := newJWTAuthFileSink(filepath.Join(credentialBaseDir, volumeID))
 
 	refresher := jwtauth.NewRefresher(opts, sink)
 	if err := refresher.Start(ctx); err != nil {

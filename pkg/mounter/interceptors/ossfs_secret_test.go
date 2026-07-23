@@ -790,7 +790,7 @@ func TestRotateTokenFiles(t *testing.T) {
 			}
 
 			// Call rotateTokenFiles
-			rotated, err := mounterutils.RotateTokenFiles(hashDir, tt.secrets)
+			rotated, err := rotateTokenFiles(hashDir, tt.secrets)
 			assert.Equal(t, tt.wantErr, err != nil, "error mismatch")
 			assert.Equal(t, tt.wantRotated, rotated, "rotated mismatch")
 
@@ -838,7 +838,7 @@ func TestRotateTokenFiles(t *testing.T) {
 			mounterutils.KeyAccessKeySecret: "newAKSecret",
 			mounterutils.KeySecurityToken:   "newToken",
 		}
-		rotated, err := mounterutils.RotateTokenFiles(regularDir, newSecrets)
+		rotated, err := rotateTokenFiles(regularDir, newSecrets)
 		assert.Error(t, err, "should return error for regular directory")
 		assert.False(t, rotated, "should not have rotated")
 		assert.Contains(t, err.Error(), "regular directory")
@@ -1056,7 +1056,7 @@ func TestRotateTokenFiles_SymlinkAtomicUpdate(t *testing.T) {
 			mounterutils.KeyExpiration:      "exp1",
 		}
 
-		rotated, err := mounterutils.RotateTokenFiles(dir, secrets)
+		rotated, err := rotateTokenFiles(dir, secrets)
 		require.NoError(t, err)
 		assert.True(t, rotated)
 
@@ -1093,7 +1093,7 @@ func TestRotateTokenFiles_SymlinkAtomicUpdate(t *testing.T) {
 			mounterutils.KeySecurityToken:   "token1",
 			mounterutils.KeyExpiration:      "exp1",
 		}
-		_, err := mounterutils.RotateTokenFiles(dir, secrets1)
+		_, err := rotateTokenFiles(dir, secrets1)
 		require.NoError(t, err)
 
 		// Get initial data directory
@@ -1107,7 +1107,7 @@ func TestRotateTokenFiles_SymlinkAtomicUpdate(t *testing.T) {
 			mounterutils.KeySecurityToken:   "token2",
 			mounterutils.KeyExpiration:      "exp2",
 		}
-		rotated, err := mounterutils.RotateTokenFiles(dir, secrets2)
+		rotated, err := rotateTokenFiles(dir, secrets2)
 		require.NoError(t, err)
 		assert.True(t, rotated)
 
@@ -1151,7 +1151,7 @@ func TestRotateTokenFiles_SymlinkAtomicUpdate(t *testing.T) {
 			mounterutils.KeyAccessKeySecret: "aksecret1",
 			mounterutils.KeySecurityToken:   "token1",
 		}
-		_, err := mounterutils.RotateTokenFiles(dir, secrets1)
+		_, err := rotateTokenFiles(dir, secrets1)
 		require.NoError(t, err)
 
 		// Verify dir is a symlink
@@ -1165,7 +1165,7 @@ func TestRotateTokenFiles_SymlinkAtomicUpdate(t *testing.T) {
 			mounterutils.KeyAccessKeySecret: "aksecret2",
 			mounterutils.KeySecurityToken:   "token2",
 		}
-		_, err = mounterutils.RotateTokenFiles(dir, secrets2)
+		_, err = rotateTokenFiles(dir, secrets2)
 		require.NoError(t, err)
 
 		// Verify dir symlink now points to a new directory
@@ -1192,7 +1192,7 @@ func TestRotateTokenFiles_SymlinkAtomicUpdate(t *testing.T) {
 				mounterutils.KeyAccessKeySecret: fmt.Sprintf("aksecret%d", i),
 				mounterutils.KeySecurityToken:   fmt.Sprintf("token%d", i),
 			}
-			rotated, err := mounterutils.RotateTokenFiles(dir, secrets)
+			rotated, err := rotateTokenFiles(dir, secrets)
 			require.NoError(t, err)
 			if i == 1 {
 				assert.True(t, rotated) // First update should rotate
