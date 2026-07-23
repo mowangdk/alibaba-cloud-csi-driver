@@ -36,7 +36,7 @@ func writeTokenFile(t *testing.T, dir, accessToken, sandboxClientID string) stri
 func newSTSServer(t *testing.T, ak, sk, token string, expiration time.Time) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w,
+		_, _ = fmt.Fprintf(w,
 			`{"requestId":"r1","stsToken":{"accessKeyId":%q,"accessKeySecret":%q,"securityToken":%q,"expiration":%q}}`,
 			ak, sk, token, expiration.Format(time.RFC3339))
 	}))
