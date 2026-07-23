@@ -2,8 +2,8 @@ package interceptors
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,11 +12,37 @@ import (
 	"time"
 
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/jwtauth"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/proxy/server"
 	mounterutils "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// writeTokenFile writes a jwtauth sandbox token file for interceptor tests.
+func writeTokenFile(t *testing.T, dir, accessToken, sandboxClientID string) string {
+	t.Helper()
+	tokenPath := filepath.Join(dir, "token.json")
+	content := fmt.Sprintf(
+		`{"requestId":"req-1","accessToken":%q,"sandboxClientId":%q,"accessTokenExpiration":%q}`,
+		accessToken, sandboxClientID, time.Now().Add(time.Hour).Format(time.RFC3339),
+	)
+	require.NoError(t, os.WriteFile(tokenPath, []byte(content), 0600))
+	return tokenPath
+}
+
+// newSTSServer returns an httptest server answering the credential exchange
+// with the given STS triple and expiration.
+func newSTSServer(t *testing.T, ak, sk, token string, expiration time.Time) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w,
+			`{"requestId":"r1","stsToken":{"accessKeyId":%q,"accessKeySecret":%q,"securityToken":%q,"expiration":%q}}`,
+			ak, sk, token, expiration.Format(time.RFC3339))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
 
 func TestJWTAuthInterceptor_NoOpForOtherAuthTypes(t *testing.T) {
 	cases := [][]string{
@@ -56,8 +82,8 @@ func TestResolveJWTAuthOpts_Defaults(t *testing.T) {
 	opts := resolveJWTAuthOpts(idx)
 	assert.Equal(t, "sb-123", opts.SandboxId)
 	assert.Equal(t, "my-cred", opts.CredProvider)
-	assert.Equal(t, server.GetJWTAuthTokenFilePath("sb-123"), opts.TokenFile)
-	assert.Equal(t, server.GetJWTAuthEndpoint(), opts.Endpoint)
+	assert.Equal(t, jwtauth.GetTokenFilePath("sb-123"), opts.TokenFile)
+	assert.Equal(t, jwtauth.GetEndpoint(), opts.Endpoint)
 }
 
 func TestResolveJWTAuthOpts_ExplicitOverrides(t *testing.T) {
@@ -121,22 +147,13 @@ func TestJWTAuthInterceptor_ConfigError(t *testing.T) {
 func TestJWTAuthInterceptor_EndToEnd(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli-1")
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(credentialResponse{
-			RequestID: "r1",
-			STSToken: &stsToken{
-				AccessKeyID: "ak", AccessKeySecret: "sk", SecurityToken: "st",
-				Expiration: time.Now().Add(time.Hour).Format(time.RFC3339),
-			},
-		})
-	}))
-	defer srv.Close()
+	srv := newSTSServer(t, "ak", "sk", "st", time.Now().Add(time.Hour))
 
 	exitCh := make(chan error, 1)
 	var credDir string
 	op := &mounter.MountOperation{
 		VolumeID: "vol-e2e",
+		Target:   "/mnt/e2e",
 		Options: []string{
 			"authType=jwtauth",
 			"sandboxId=sb-e2e",
@@ -167,6 +184,7 @@ func TestJWTAuthInterceptor_EndToEnd(t *testing.T) {
 
 	err := JWTAuthInterceptor(context.Background(), op, handler)
 	require.NoError(t, err)
+	assert.True(t, jwtauth.DefaultManager.HasTarget("/mnt/e2e"), "refresher should be registered for the target")
 
 	// Simulate process exit -> refresher stopped and files cleaned up.
 	close(exitCh)
@@ -174,26 +192,20 @@ func TestJWTAuthInterceptor_EndToEnd(t *testing.T) {
 		_, statErr := os.Stat(credDir)
 		return os.IsNotExist(statErr)
 	}, 3*time.Second, 20*time.Millisecond, "credential dir should be cleaned up after exit")
+	assert.Eventually(t, func() bool {
+		return !jwtauth.DefaultManager.HasTarget("/mnt/e2e")
+	}, 3*time.Second, 20*time.Millisecond, "refresher should be deregistered after exit")
 }
 
 func TestJWTAuthInterceptor_HandlerErrorCleansUp(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli-1")
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(credentialResponse{
-			RequestID: "r1",
-			STSToken: &stsToken{
-				AccessKeyID: "ak", AccessKeySecret: "sk", SecurityToken: "st",
-				Expiration: time.Now().Add(time.Hour).Format(time.RFC3339),
-			},
-		})
-	}))
-	defer srv.Close()
+	srv := newSTSServer(t, "ak", "sk", "st", time.Now().Add(time.Hour))
 
 	var credDir string
 	op := &mounter.MountOperation{
 		VolumeID: "vol-handler-err",
+		Target:   "/mnt/handler-err",
 		Options: []string{
 			"authType=jwtauth",
 			"sandboxId=sb-err",
@@ -219,7 +231,8 @@ func TestJWTAuthInterceptor_HandlerErrorCleansUp(t *testing.T) {
 	err := JWTAuthInterceptor(context.Background(), op, handler)
 	require.ErrorIs(t, err, handlerErr)
 
-	// A failed mount must not leave STS files on disk.
+	// A failed mount must not leave STS files on disk or a tracked refresher.
 	_, statErr := os.Stat(credDir)
 	assert.True(t, os.IsNotExist(statErr), "credential dir should be removed after handler error")
+	assert.False(t, jwtauth.DefaultManager.HasTarget("/mnt/handler-err"))
 }

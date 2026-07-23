@@ -1,4 +1,4 @@
-package interceptors
+package jwtauth
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,24 +45,25 @@ func newTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	return srv
 }
 
-func newTestRefresher(tokenPath, endpoint, outputDir string) *credentialRefresher {
-	return newCredentialRefresher(JWTAuthOpts{
+func newTestRefresher(tokenPath, endpoint, outputDir string) (*Refresher, *FileSink) {
+	sink := NewFileSink(outputDir)
+	return NewRefresher(Opts{
 		TokenFile:    tokenPath,
 		Endpoint:     endpoint,
 		CredProvider: "my-provider",
 		SandboxId:    "sb-test",
-	}, outputDir)
+	}, sink), sink
 }
 
 // readCredFile reads a credential file through the rotation symlink dir.
-func readCredFile(t *testing.T, r *credentialRefresher, key string) string {
+func readCredFile(t *testing.T, s *FileSink, key string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(r.Dir(), key))
+	data, err := os.ReadFile(filepath.Join(s.Dir(), key))
 	require.NoError(t, err)
 	return string(data)
 }
 
-func TestCredentialRefresher_SuccessfulFetchAndWrite(t *testing.T) {
+func TestRefresher_SuccessfulFetchAndWrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := writeTokenFile(t, tmpDir, "test-token", "client-123")
 
@@ -78,7 +80,7 @@ func TestCredentialRefresher_SuccessfulFetchAndWrite(t *testing.T) {
 
 		resp := credentialResponse{
 			RequestID: "resp-1",
-			STSToken: &stsToken{
+			STSToken: &STSToken{
 				AccessKeyID:     "AKID-test",
 				AccessKeySecret: "AKSECRET-test",
 				SecurityToken:   "TOKEN-test",
@@ -90,21 +92,21 @@ func TestCredentialRefresher_SuccessfulFetchAndWrite(t *testing.T) {
 	})
 
 	outputDir := filepath.Join(tmpDir, "creds")
-	refresher := newTestRefresher(tokenPath, srv.URL, outputDir)
+	refresher, sink := newTestRefresher(tokenPath, srv.URL, outputDir)
 
 	err := refresher.Start(context.Background())
 	require.NoError(t, err)
 	defer refresher.Stop()
 
-	assert.Equal(t, filepath.Join(outputDir, credentialDataDir), refresher.Dir())
+	assert.Equal(t, filepath.Join(outputDir, DataDirName), sink.Dir())
 
-	assert.Equal(t, "AKID-test", readCredFile(t, refresher, mounterutils.KeyAccessKeyId))
-	assert.Equal(t, "AKSECRET-test", readCredFile(t, refresher, mounterutils.KeyAccessKeySecret))
-	assert.Equal(t, "TOKEN-test", readCredFile(t, refresher, mounterutils.KeySecurityToken))
-	assert.NotEmpty(t, readCredFile(t, refresher, mounterutils.KeyExpiration))
+	assert.Equal(t, "AKID-test", readCredFile(t, sink, mounterutils.KeyAccessKeyId))
+	assert.Equal(t, "AKSECRET-test", readCredFile(t, sink, mounterutils.KeyAccessKeySecret))
+	assert.Equal(t, "TOKEN-test", readCredFile(t, sink, mounterutils.KeySecurityToken))
+	assert.NotEmpty(t, readCredFile(t, sink, mounterutils.KeyExpiration))
 }
 
-func TestCredentialRefresher_TokenFileErrors(t *testing.T) {
+func TestRefresher_TokenFileErrors(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	tests := []struct {
@@ -125,7 +127,7 @@ func TestCredentialRefresher_TokenFileErrors(t *testing.T) {
 				require.NoError(t, os.WriteFile(tokenPath, []byte(tt.tokenData), 0600))
 			}
 			outputDir := filepath.Join(tmpDir, "creds-"+tt.name)
-			refresher := newTestRefresher(tokenPath, "http://localhost:0", outputDir)
+			refresher, _ := newTestRefresher(tokenPath, "http://localhost:0", outputDir)
 
 			err := refresher.Start(context.Background())
 			require.Error(t, err)
@@ -134,7 +136,7 @@ func TestCredentialRefresher_TokenFileErrors(t *testing.T) {
 	}
 }
 
-func TestCredentialRefresher_EndpointErrors(t *testing.T) {
+func TestRefresher_EndpointErrors(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli")
 
@@ -143,13 +145,13 @@ func TestCredentialRefresher_EndpointErrors(t *testing.T) {
 		_, _ = w.Write([]byte("internal error"))
 	})
 
-	refresher := newTestRefresher(tokenPath, srv.URL, filepath.Join(tmpDir, "creds"))
+	refresher, _ := newTestRefresher(tokenPath, srv.URL, filepath.Join(tmpDir, "creds"))
 	err := refresher.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
 }
 
-func TestCredentialRefresher_NilSTSToken(t *testing.T) {
+func TestRefresher_NilSTSToken(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli")
 
@@ -157,13 +159,13 @@ func TestCredentialRefresher_NilSTSToken(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(credentialResponse{RequestID: "r1", STSToken: nil})
 	})
 
-	refresher := newTestRefresher(tokenPath, srv.URL, filepath.Join(tmpDir, "creds"))
+	refresher, _ := newTestRefresher(tokenPath, srv.URL, filepath.Join(tmpDir, "creds"))
 	err := refresher.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil stsToken")
 }
 
-func TestCredentialRefresher_StopDuringRefresh(t *testing.T) {
+func TestRefresher_StopDuringRefresh(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli")
 
@@ -172,7 +174,7 @@ func TestCredentialRefresher_StopDuringRefresh(t *testing.T) {
 		callCount.Add(1)
 		resp := credentialResponse{
 			RequestID: "r1",
-			STSToken: &stsToken{
+			STSToken: &STSToken{
 				AccessKeyID:     "ak",
 				AccessKeySecret: "sk",
 				SecurityToken:   "st",
@@ -182,7 +184,7 @@ func TestCredentialRefresher_StopDuringRefresh(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	refresher := newTestRefresher(tokenPath, srv.URL, filepath.Join(tmpDir, "creds"))
+	refresher, _ := newTestRefresher(tokenPath, srv.URL, filepath.Join(tmpDir, "creds"))
 	refresher.refreshMargin = 1 * time.Second
 
 	err := refresher.Start(context.Background())
@@ -197,14 +199,14 @@ func TestCredentialRefresher_StopDuringRefresh(t *testing.T) {
 	assert.Equal(t, finalCount, callCount.Load())
 }
 
-func TestCredentialRefresher_CleanupRemovesFiles(t *testing.T) {
+func TestRefresher_CleanupRemovesFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli")
 
 	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(credentialResponse{
 			RequestID: "r1",
-			STSToken: &stsToken{
+			STSToken: &STSToken{
 				AccessKeyID: "ak", AccessKeySecret: "sk", SecurityToken: "st",
 				Expiration: time.Now().Add(time.Hour).Format(time.RFC3339),
 			},
@@ -212,11 +214,11 @@ func TestCredentialRefresher_CleanupRemovesFiles(t *testing.T) {
 	})
 
 	outputDir := filepath.Join(tmpDir, "creds")
-	refresher := newTestRefresher(tokenPath, srv.URL, outputDir)
+	refresher, sink := newTestRefresher(tokenPath, srv.URL, outputDir)
 	require.NoError(t, refresher.Start(context.Background()))
 	refresher.Stop()
 
-	_, err := os.Stat(refresher.Dir())
+	_, err := os.Stat(sink.Dir())
 	require.NoError(t, err)
 
 	refresher.Cleanup()
@@ -225,8 +227,115 @@ func TestCredentialRefresher_CleanupRemovesFiles(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
-func TestCredentialRefresher_CalcSleepDuration(t *testing.T) {
-	r := &credentialRefresher{refreshMargin: 5 * time.Minute}
+// fakeSink records applied credentials and cleanups for refresher tests that
+// do not need real files.
+type fakeSink struct {
+	mu      sync.Mutex
+	applied []*STSToken
+	cleaned int
+	err     error
+}
+
+func (s *fakeSink) Apply(cred *STSToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return s.err
+	}
+	s.applied = append(s.applied, cred)
+	return nil
+}
+
+func (s *fakeSink) Cleanup() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleaned++
+}
+
+func (s *fakeSink) appliedCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.applied)
+}
+
+func TestRefresher_StartWithSkipsInitialApply(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli")
+
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(credentialResponse{
+			RequestID: "r1",
+			STSToken: &STSToken{
+				AccessKeyID: "ak2", AccessKeySecret: "sk2", SecurityToken: "st2",
+				Expiration: time.Now().Add(time.Hour).Format(time.RFC3339),
+			},
+		})
+	})
+
+	sink := &fakeSink{}
+	refresher := NewRefresher(Opts{
+		TokenFile:    tokenPath,
+		Endpoint:     srv.URL,
+		CredProvider: "cp",
+		SandboxId:    "sb",
+	}, sink)
+
+	initial := &STSToken{
+		AccessKeyID: "ak1", AccessKeySecret: "sk1", SecurityToken: "st1",
+		Expiration: time.Now().Add(time.Hour).Format(time.RFC3339),
+	}
+	require.NoError(t, refresher.StartWith(initial))
+	defer refresher.Stop()
+
+	// The initial credential must not be re-applied through the sink.
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, 0, sink.appliedCount())
+}
+
+func TestRefresher_StartWithAppliesRotations(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli")
+
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(credentialResponse{
+			RequestID: "r1",
+			STSToken: &STSToken{
+				AccessKeyID: "ak2", AccessKeySecret: "sk2", SecurityToken: "st2",
+				Expiration: time.Now().Add(time.Hour).Format(time.RFC3339),
+			},
+		})
+	})
+
+	sink := &fakeSink{}
+	refresher := NewRefresher(Opts{
+		TokenFile:    tokenPath,
+		Endpoint:     srv.URL,
+		CredProvider: "cp",
+		SandboxId:    "sb",
+	}, sink)
+
+	// Expired initial credential forces the first rotation after
+	// minSleepDuration; shrink the margin so calcSleepDuration clamps to it.
+	initial := &STSToken{
+		AccessKeyID: "ak1", AccessKeySecret: "sk1", SecurityToken: "st1",
+		Expiration: "not-a-date", // parse failure -> sleep = refreshMargin
+	}
+	refresher.refreshMargin = 50 * time.Millisecond
+	require.NoError(t, refresher.StartWith(initial))
+	defer refresher.Stop()
+
+	assert.Eventually(t, func() bool {
+		return sink.appliedCount() >= 1
+	}, 3*time.Second, 20*time.Millisecond, "rotated credential should be applied via sink")
+
+	sink.mu.Lock()
+	got := sink.applied[0]
+	sink.mu.Unlock()
+	assert.Equal(t, "ak2", got.AccessKeyID)
+}
+
+func TestRefresher_CalcSleepDuration(t *testing.T) {
+	r := &Refresher{refreshMargin: 5 * time.Minute}
 
 	t.Run("normal expiration", func(t *testing.T) {
 		exp := time.Now().Add(30 * time.Minute).Format(time.RFC3339)
@@ -246,31 +355,46 @@ func TestCredentialRefresher_CalcSleepDuration(t *testing.T) {
 	})
 }
 
-func TestJWTAuthOpts_Validate(t *testing.T) {
-	valid := JWTAuthOpts{
+func TestOpts_Validate(t *testing.T) {
+	valid := Opts{
 		SandboxId: "sb", CredProvider: "cp", TokenFile: "/tok", Endpoint: "https://x",
 	}
-	assert.NoError(t, valid.validate())
+	assert.NoError(t, valid.Validate())
 
 	cases := []struct {
 		name string
-		mut  func(o *JWTAuthOpts)
+		mut  func(o *Opts)
 		want string
 	}{
-		{"missing sandbox", func(o *JWTAuthOpts) { o.SandboxId = "" }, "sandboxId"},
-		{"missing provider", func(o *JWTAuthOpts) { o.CredProvider = "" }, "provider"},
-		{"missing token", func(o *JWTAuthOpts) { o.TokenFile = "" }, "token file"},
-		{"missing endpoint", func(o *JWTAuthOpts) { o.Endpoint = "" }, "endpoint"},
+		{"missing sandbox", func(o *Opts) { o.SandboxId = "" }, "sandboxId"},
+		{"missing provider", func(o *Opts) { o.CredProvider = "" }, "provider"},
+		{"missing token", func(o *Opts) { o.TokenFile = "" }, "token file"},
+		{"missing endpoint", func(o *Opts) { o.Endpoint = "" }, "endpoint"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			o := valid
 			tc.mut(&o)
-			err := o.validate()
+			err := o.Validate()
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
+}
+
+func TestGetEndpoint(t *testing.T) {
+	t.Run("env override", func(t *testing.T) {
+		t.Setenv("JWTAUTH_ENDPOINT", "https://custom:9443/")
+		assert.Equal(t, "https://custom:9443/", GetEndpoint())
+	})
+	t.Run("default", func(t *testing.T) {
+		t.Setenv("JWTAUTH_ENDPOINT", "")
+		assert.Equal(t, defaultEndpoint, GetEndpoint())
+	})
+}
+
+func TestGetTokenFilePath(t *testing.T) {
+	assert.Equal(t, "/var/opt/sandbox/agent-token/sb-1.token", GetTokenFilePath("sb-1"))
 }
 
 // generateTestCA returns a self-signed CA certificate encoded as PEM.
@@ -294,8 +418,7 @@ func generateTestCA(t *testing.T) []byte {
 
 func TestBuildHTTPClient_TLS(t *testing.T) {
 	t.Run("no CA uses system root pool", func(t *testing.T) {
-		r := newCredentialRefresher(JWTAuthOpts{}, t.TempDir())
-		client, err := r.buildHTTPClient()
+		client, err := buildHTTPClient("")
 		require.NoError(t, err)
 		tr := client.Transport.(*http.Transport)
 		assert.Nil(t, tr.TLSClientConfig.RootCAs, "system root pool expected (RootCAs nil)")
@@ -306,8 +429,7 @@ func TestBuildHTTPClient_TLS(t *testing.T) {
 		dir := t.TempDir()
 		caPath := filepath.Join(dir, "ca.crt")
 		require.NoError(t, os.WriteFile(caPath, generateTestCA(t), 0600))
-		r := newCredentialRefresher(JWTAuthOpts{CAFile: caPath}, dir)
-		client, err := r.buildHTTPClient()
+		client, err := buildHTTPClient(caPath)
 		require.NoError(t, err)
 		tr := client.Transport.(*http.Transport)
 		assert.NotNil(t, tr.TLSClientConfig.RootCAs)
@@ -315,8 +437,7 @@ func TestBuildHTTPClient_TLS(t *testing.T) {
 	})
 
 	t.Run("missing CA file fails, no insecure fallback", func(t *testing.T) {
-		r := newCredentialRefresher(JWTAuthOpts{CAFile: "/nonexistent/ca.crt"}, t.TempDir())
-		client, err := r.buildHTTPClient()
+		client, err := buildHTTPClient("/nonexistent/ca.crt")
 		require.Error(t, err)
 		assert.Nil(t, client)
 		assert.Contains(t, err.Error(), "read CA file")
@@ -326,8 +447,7 @@ func TestBuildHTTPClient_TLS(t *testing.T) {
 		dir := t.TempDir()
 		caPath := filepath.Join(dir, "bad.crt")
 		require.NoError(t, os.WriteFile(caPath, []byte("not a pem certificate"), 0600))
-		r := newCredentialRefresher(JWTAuthOpts{CAFile: caPath}, dir)
-		client, err := r.buildHTTPClient()
+		client, err := buildHTTPClient(caPath)
 		require.Error(t, err)
 		assert.Nil(t, client)
 		assert.Contains(t, err.Error(), "parse CA file")

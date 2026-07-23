@@ -20,14 +20,18 @@ type Mounter interface {
 }
 
 type MountOperation struct {
-	Source      string
-	Target      string
-	FsType      string
-	Options     []string
-	Args        []string
-	Secrets     map[string]string
-	MetricsPath string
-	VolumeID    string
+	Source  string
+	Target  string
+	FsType  string
+	Options []string
+	// SensitiveOptions are mount options that carry secrets (e.g. STS
+	// credentials). They are passed to the mount via MountSensitive so they
+	// are masked in logs and error messages, and must never be logged.
+	SensitiveOptions []string
+	Args             []string
+	Secrets          map[string]string
+	MetricsPath      string
+	VolumeID         string
 
 	MountResult any
 }

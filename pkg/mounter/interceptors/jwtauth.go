@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/jwtauth"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/proxy/server"
 	mounterutils "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/utils"
 	"k8s.io/klog/v2"
@@ -24,10 +25,9 @@ const (
 	// credential directories are created.
 	credentialBaseDir = "/var/run/nas/credentials"
 
-	// Mount options consumed by this interceptor. These are infrastructure-only:
-	// they are removed from op.Options before the mount handler runs and are
-	// replaced by optCredentialDir so the FUSE entrypoint only sees the resolved
-	// credential directory.
+	// Mount options consumed by the jwtauth interceptors. These are
+	// infrastructure-only: they are removed from op.Options before the mount
+	// handler runs (see jwtAuthInfraOptionKeys).
 	optAuthType                = "authType"
 	optSandboxId               = "sandboxId"
 	optSandboxCredProviderName = "sandboxCredProviderName"
@@ -41,20 +41,27 @@ const (
 	optCredentialDir = "credentialDir"
 )
 
-// jwtAuthManager tracks all running credential refreshers so the driver
-// can wait for them to stop during Terminate, with a bounded timeout mirroring
-// server.MountMonitorManager.WaitForAllMonitoring.
-var jwtAuthManager = newRefresherManager()
+// jwtAuthInfraOptionKeys is the shared set of infrastructure-only jwtauth
+// mount options stripped by all jwtauth interceptors before the mount handler
+// runs.
+var jwtAuthInfraOptionKeys = map[string]struct{}{
+	optSandboxId:               {},
+	optSandboxCredProviderName: {},
+	optJWTAuthEndpoint:         {},
+	optJWTAuthTokenFile:        {},
+	optJWTAuthCredProvider:     {},
+	optJWTAuthCAFile:           {},
+}
 
 // JWTAuthInterceptor provisions scoped STS credentials for FUSE mounts
 // that use authType=jwtauth.
 //
 // It mirrors OssfsSecretInterceptor: before the mount it starts a background
-// credential refresher that exchanges the sandbox jwtauth token for an
-// STS token and writes the credential files atomically to a per-mount
-// directory. It rewrites op.Options so the entrypoint receives only
-// credentialDir (plus authType), and binds the refresher lifetime to the mount
-// process via OssfsMountResult.ExitChan.
+// credential refresher (jwtauth.Refresher with a FileSink) that exchanges the
+// sandbox jwtauth token for an STS token and writes the credential files
+// atomically to a per-mount directory. It rewrites op.Options so the
+// entrypoint receives only credentialDir (plus authType), and binds the
+// refresher lifetime to the mount process via OssfsMountResult.ExitChan.
 //
 // For any other authType (including the empty default) it is a no-op.
 func JWTAuthInterceptor(ctx context.Context, op *mounter.MountOperation, handler mounter.MountHandler) error {
@@ -67,7 +74,7 @@ func JWTAuthInterceptor(ctx context.Context, op *mounter.MountOperation, handler
 	}
 
 	opts := resolveJWTAuthOpts(idx)
-	if err := opts.validate(); err != nil {
+	if err := opts.Validate(); err != nil {
 		return fmt.Errorf("jwtauth config error: %w", err)
 	}
 
@@ -79,29 +86,27 @@ func JWTAuthInterceptor(ctx context.Context, op *mounter.MountOperation, handler
 		// Never fall back to a shared directory: distinct mounts would collide
 		// on the same credential directory and their refreshers would overwrite
 		// each other's STS files. sandboxId is already required by
-		// opts.validate() above, so this is a defensive guard — fail rather than
+		// opts.Validate() above, so this is a defensive guard — fail rather than
 		// use a shared "default" directory.
 		return fmt.Errorf("jwtauth config error: neither volumeID nor sandboxId is set, cannot derive a unique credential directory")
 	}
-	outputDir := filepath.Join(credentialBaseDir, volumeID)
+	sink := jwtauth.NewFileSink(filepath.Join(credentialBaseDir, volumeID))
 
-	refresher := newCredentialRefresher(opts, outputDir)
+	refresher := jwtauth.NewRefresher(opts, sink)
 	if err := refresher.Start(ctx); err != nil {
 		return fmt.Errorf("start jwtauth credential refresher: %w", err)
 	}
-	jwtAuthManager.add(refresher)
+	jwtauth.DefaultManager.Add(op.Target, refresher)
 
 	// Replace infrastructure-only options with the resolved credential dir so
 	// the FUSE entrypoint only sees credentialDir + authType.
-	op.Options = rewriteJWTAuthOptions(op.Options, refresher.Dir())
+	op.Options = rewriteJWTAuthOptions(op.Options, sink.Dir())
 
 	err := handler(ctx, op)
 	if err != nil {
 		// Mount failed: stop the refresher and remove the credential files
 		// written by Start, so failed mounts do not leave STS files on disk.
-		refresher.Stop()
-		refresher.Cleanup()
-		jwtAuthManager.remove(refresher)
+		jwtauth.DefaultManager.StopRefresher(refresher)
 		return err
 	}
 
@@ -109,27 +114,21 @@ func JWTAuthInterceptor(ctx context.Context, op *mounter.MountOperation, handler
 		// Mount reported success but produced no result to hang cleanup on.
 		// Stop the refresher and remove its credential directory to avoid
 		// leaking the goroutine and the on-disk STS files.
-		refresher.Stop()
-		refresher.Cleanup()
-		jwtAuthManager.remove(refresher)
+		jwtauth.DefaultManager.StopRefresher(refresher)
 		return nil
 	}
 	result, ok := op.MountResult.(server.OssfsMountResult)
 	if !ok {
 		klog.ErrorS(errors.New("failed to assert fuse mount result"),
 			"stopping jwtauth refresher", "mountpoint", op.Target)
-		refresher.Stop()
-		refresher.Cleanup()
-		jwtAuthManager.remove(refresher)
+		jwtauth.DefaultManager.StopRefresher(refresher)
 		return nil
 	}
 
 	// Bind the refresher lifetime to the mount process.
 	go func() {
 		<-result.ExitChan
-		refresher.Stop()
-		refresher.Cleanup()
-		jwtAuthManager.remove(refresher)
+		jwtauth.DefaultManager.StopRefresher(refresher)
 	}()
 	return nil
 }
@@ -138,8 +137,8 @@ func JWTAuthInterceptor(ctx context.Context, op *mounter.MountOperation, handler
 // from the indexed mount options. Defaults are resolved here (formerly in the
 // driver's ApplyOptionDefaults) so the interceptor is the single owner of
 // jwtauth configuration.
-func resolveJWTAuthOpts(idx map[string]string) JWTAuthOpts {
-	opts := JWTAuthOpts{
+func resolveJWTAuthOpts(idx map[string]string) jwtauth.Opts {
+	opts := jwtauth.Opts{
 		TokenFile:    idx[optJWTAuthTokenFile],
 		Endpoint:     idx[optJWTAuthEndpoint],
 		CredProvider: idx[optJWTAuthCredProvider],
@@ -147,10 +146,10 @@ func resolveJWTAuthOpts(idx map[string]string) JWTAuthOpts {
 		SandboxId:    idx[optSandboxId],
 	}
 	if opts.Endpoint == "" {
-		opts.Endpoint = server.GetJWTAuthEndpoint()
+		opts.Endpoint = jwtauth.GetEndpoint()
 	}
 	if opts.TokenFile == "" && opts.SandboxId != "" {
-		opts.TokenFile = server.GetJWTAuthTokenFilePath(opts.SandboxId)
+		opts.TokenFile = jwtauth.GetTokenFilePath(opts.SandboxId)
 	}
 	if opts.CredProvider == "" {
 		opts.CredProvider = idx[optSandboxCredProviderName]
@@ -170,10 +169,7 @@ func rewriteJWTAuthOptions(options []string, credentialDir string) []string {
 	result := make([]string, 0, len(options)+1)
 	for _, opt := range options {
 		key, _, _ := strings.Cut(opt, "=")
-		switch key {
-		case optSandboxId, optSandboxCredProviderName,
-			optJWTAuthEndpoint, optJWTAuthTokenFile,
-			optJWTAuthCredProvider, optJWTAuthCAFile:
+		if _, infra := jwtAuthInfraOptionKeys[key]; infra {
 			continue
 		}
 		result = append(result, opt)

@@ -2,13 +2,13 @@ package interceptors
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/jwtauth"
 	mounterutils "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,22 +90,13 @@ func TestAlinasJWTAuthInterceptor_FetchFailFast(t *testing.T) {
 func TestAlinasJWTAuthInterceptor_EndToEnd(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli-1")
+	srv := newSTSServer(t, "AKID", "AKSECRET", "STOKEN", time.Now().Add(time.Hour))
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(credentialResponse{
-			RequestID: "r1",
-			STSToken: &stsToken{
-				AccessKeyID: "AKID", AccessKeySecret: "AKSECRET", SecurityToken: "STOKEN",
-				Expiration: time.Now().Add(time.Hour).Format(time.RFC3339),
-			},
-		})
-	}))
-	defer srv.Close()
-
+	const target = "/mnt/nas"
 	// Mix compound and single options, plus a stale static credential that must
 	// be stripped and a pre-existing tls that must not be duplicated.
 	op := &mounter.MountOperation{
-		Target: "/mnt/nas",
+		Target: target,
 		Options: []string{
 			"tls,vers=3,authType=jwtauth",
 			"sandboxId=sb-1",
@@ -117,31 +108,37 @@ func TestAlinasJWTAuthInterceptor_EndToEnd(t *testing.T) {
 		},
 	}
 
-	var seen map[string]string
+	var seenOptions, seenSensitive map[string]string
 	err := AlinasJWTAuthInterceptor(context.Background(), op, func(ctx context.Context, o *mounter.MountOperation) error {
-		seen = mounterutils.IndexMountOptions(o.Options)
+		seenOptions = mounterutils.IndexMountOptions(o.Options)
+		seenSensitive = mounterutils.IndexMountOptions(o.SensitiveOptions)
 		return nil
 	})
 	require.NoError(t, err)
+	defer jwtauth.DefaultManager.StopByTarget(target)
 
-	// STS triple injected.
-	assert.Equal(t, "AKID", seen[optAlinasAccessKeyID])
-	assert.Equal(t, "AKSECRET", seen[optAlinasAccessKeySecret])
-	assert.Equal(t, "STOKEN", seen[optAlinasSecurityToken])
-	// Stale static AK stripped (replaced by STS value, not "STALE").
-	assert.NotEqual(t, "STALE", seen[optAlinasAccessKeyID])
+	// STS triple injected into SensitiveOptions only.
+	assert.Equal(t, "AKID", seenSensitive[optAlinasAccessKeyID])
+	assert.Equal(t, "AKSECRET", seenSensitive[optAlinasAccessKeySecret])
+	assert.Equal(t, "STOKEN", seenSensitive[optAlinasSecurityToken])
+	// Plain options must not carry any credential (stale static AK stripped,
+	// resolved STS never placed there).
+	for _, k := range []string{optAlinasAccessKeyID, optAlinasAccessKeySecret, optAlinasSecurityToken} {
+		_, ok := seenOptions[k]
+		assert.False(t, ok, "expected %s to be absent from plain options", k)
+	}
 	// Infra-only jwtauth options removed.
 	for _, k := range []string{optSandboxId, optSandboxCredProviderName,
 		optJWTAuthEndpoint, optJWTAuthTokenFile} {
-		_, ok := seen[k]
+		_, ok := seenOptions[k]
 		assert.False(t, ok, "expected %s to be removed", k)
 	}
 	// Preserved, non-credential options.
-	assert.Equal(t, "3", seen["vers"])
-	_, hasRo := seen["ro"]
+	assert.Equal(t, "3", seenOptions["vers"])
+	_, hasRo := seenOptions["ro"]
 	assert.True(t, hasRo)
-	// tls preserved (not duplicated).
-	_, hasTLS := seen[optAlinasTLS]
+	// tls preserved (not duplicated), ram added.
+	_, hasTLS := seenOptions[optAlinasTLS]
 	assert.True(t, hasTLS)
 	tlsCount := 0
 	for _, o := range op.Options {
@@ -150,19 +147,57 @@ func TestAlinasJWTAuthInterceptor_EndToEnd(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, tlsCount, "tls must not be duplicated")
+	_, hasRAM := seenOptions[optAlinasRAM]
+	assert.True(t, hasRAM, "ram should be added for jwtauth mounts")
 	// authType preserved so downstream can branch.
-	assert.Equal(t, AuthTypeJWTAuth, seen[optAuthType])
+	assert.Equal(t, AuthTypeJWTAuth, seenOptions[optAuthType])
+
+	// A refresher must be registered for the mount target after success.
+	assert.True(t, jwtauth.DefaultManager.HasTarget(target), "refresher should be registered")
+	// Stopping by target (as the driver's Unmount does) deregisters it.
+	jwtauth.DefaultManager.StopByTarget(target)
+	assert.False(t, jwtauth.DefaultManager.HasTarget(target))
 }
 
-func TestInjectAlinasSTSOptions_AddsTLSWhenMissing(t *testing.T) {
-	cred := &stsToken{AccessKeyID: "ak", AccessKeySecret: "sk", SecurityToken: "st"}
-	out := injectAlinasSTSOptions([]string{"vers=3"}, cred)
-	idx := mounterutils.IndexMountOptions(out)
-	_, hasTLS := idx[optAlinasTLS]
+func TestAlinasJWTAuthInterceptor_HandlerErrorStartsNoRefresher(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenPath := writeTokenFile(t, tmpDir, "tok", "cli-1")
+	srv := newSTSServer(t, "ak", "sk", "st", time.Now().Add(time.Hour))
+
+	const target = "/mnt/nas-err"
+	op := &mounter.MountOperation{
+		Target: target,
+		Options: []string{
+			"authType=jwtauth",
+			"sandboxId=sb-1",
+			"sandboxCredProviderName=cp",
+			"jwtauth_endpoint=" + srv.URL,
+			"jwtauth_token_file=" + tokenPath,
+		},
+	}
+
+	handlerErr := assert.AnError
+	err := AlinasJWTAuthInterceptor(context.Background(), op, func(ctx context.Context, o *mounter.MountOperation) error {
+		return handlerErr
+	})
+	require.ErrorIs(t, err, handlerErr)
+	assert.False(t, jwtauth.DefaultManager.HasTarget(target), "no refresher must be started when the mount fails")
+}
+
+func TestSplitAlinasSTSOptions_AddsTLSAndRAMWhenMissing(t *testing.T) {
+	cred := &jwtauth.STSToken{AccessKeyID: "ak", AccessKeySecret: "sk", SecurityToken: "st"}
+	options, sensitive := splitAlinasSTSOptions([]string{"vers=3"}, cred)
+
+	optIdx := mounterutils.IndexMountOptions(options)
+	_, hasTLS := optIdx[optAlinasTLS]
 	assert.True(t, hasTLS, "tls should be added when absent")
-	assert.Equal(t, "ak", idx[optAlinasAccessKeyID])
-	assert.Equal(t, "sk", idx[optAlinasAccessKeySecret])
-	assert.Equal(t, "st", idx[optAlinasSecurityToken])
+	_, hasRAM := optIdx[optAlinasRAM]
+	assert.True(t, hasRAM, "ram should be added when absent")
+
+	sensIdx := mounterutils.IndexMountOptions(sensitive)
+	assert.Equal(t, "ak", sensIdx[optAlinasAccessKeyID])
+	assert.Equal(t, "sk", sensIdx[optAlinasAccessKeySecret])
+	assert.Equal(t, "st", sensIdx[optAlinasSecurityToken])
 }
 
 func TestFlattenMountOptions(t *testing.T) {
