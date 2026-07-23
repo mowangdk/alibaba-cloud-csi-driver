@@ -36,6 +36,7 @@ func NewDriver() *Driver {
 	driver.Mounter = mounter.NewForMounter(
 		&extendedMounter{driver: driver, Interface: mount.New("")},
 		interceptors.AlinasSecretInterceptor,
+		interceptors.AlinasJWTAuthInterceptor,
 	)
 	return driver
 }
