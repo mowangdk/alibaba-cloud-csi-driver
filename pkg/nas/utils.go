@@ -188,11 +188,16 @@ func doMount(m mounter.Mounter, opt *Options, targetPath, volumeId, podUid strin
 	}); err != nil {
 		return err
 	}
+	// Defer the cleanup so that the tmp mountpoint is unmounted only after the
+	// subpath is created and the real mount is retried. Cleanup runs before
+	// the deferred os.Remove above.
+	defer func() {
+		if err := cleanupMountpoint(m, tmpPath); err != nil {
+			klog.Errorf("failed to cleanup tmp mountpoint %s: %v", tmpPath, err)
+		}
+	}()
 	if err := os.MkdirAll(filepath.Join(tmpPath, relPath), os.ModePerm); err != nil {
 		return err
-	}
-	if err := cleanupMountpoint(m, tmpPath); err != nil {
-		klog.Errorf("failed to cleanup tmp mountpoint %s: %v", tmpPath, err)
 	}
 	return m.ExtendedMount(context.Background(), &mounter.MountOperation{
 		Source:   source,
