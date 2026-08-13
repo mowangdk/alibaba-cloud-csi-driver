@@ -173,7 +173,6 @@ func doMount(m mounter.Mounter, opt *Options, targetPath, volumeId, podUid strin
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmpPath)
 	// mount without "ro" since we need to create the subpath directory
 	rwOptions := slices.DeleteFunc(slices.Clone(combinedOptions), func(s string) bool {
 		return s == "ro"
@@ -186,20 +185,28 @@ func doMount(m mounter.Mounter, opt *Options, targetPath, volumeId, podUid strin
 		Secrets:  secrets,
 		VolumeID: volumeId,
 	}); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
-	// Defer the cleanup so that the tmp mountpoint is unmounted only after the
-	// subpath is created and the real mount is retried. Cleanup runs before
-	// the deferred os.Remove above.
-	defer func() {
+	// Cleanup of the temporary mountpoint is done asynchronously. The synchronous
+	// umount of an alinas(NFS/TLS) mount blocks for ~3s in the kernel
+	// (nfs_free_server -> synchronize_rcu), so running it inline (even via defer)
+	// keeps that latency on the NodePublishVolume critical path. Kicking it off in
+	// a goroutine lets NodePublishVolume return as soon as the real mount succeeds,
+	// while the temp mount/dir are still reliably cleaned up in the background.
+	cleanupTmp := func() {
 		if err := cleanupMountpoint(m, tmpPath); err != nil {
 			klog.Errorf("failed to cleanup tmp mountpoint %s: %v", tmpPath, err)
 		}
-	}()
+		if err := os.Remove(tmpPath); err != nil {
+			klog.Errorf("failed to remove tmp path %s: %v", tmpPath, err)
+		}
+	}
 	if err := os.MkdirAll(filepath.Join(tmpPath, relPath), os.ModePerm); err != nil {
+		go cleanupTmp()
 		return err
 	}
-	return m.ExtendedMount(context.Background(), &mounter.MountOperation{
+	err = m.ExtendedMount(context.Background(), &mounter.MountOperation{
 		Source:   source,
 		Target:   targetPath,
 		FsType:   mountFstype,
@@ -207,6 +214,8 @@ func doMount(m mounter.Mounter, opt *Options, targetPath, volumeId, podUid strin
 		Secrets:  secrets,
 		VolumeID: volumeId,
 	})
+	go cleanupTmp()
+	return err
 }
 
 func getMountRootAndRelPath(mountFsType string, opt *Options) (rootSource, relPath string) {
