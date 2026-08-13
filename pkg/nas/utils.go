@@ -188,34 +188,38 @@ func doMount(m mounter.Mounter, opt *Options, targetPath, volumeId, podUid strin
 		os.Remove(tmpPath)
 		return err
 	}
-	// Cleanup of the temporary mountpoint is done asynchronously. The synchronous
-	// umount of an alinas(NFS/TLS) mount blocks for ~3s in the kernel
-	// (nfs_free_server -> synchronize_rcu), so running it inline (even via defer)
-	// keeps that latency on the NodePublishVolume critical path. Kicking it off in
-	// a goroutine lets NodePublishVolume return as soon as the real mount succeeds,
-	// while the temp mount/dir are still reliably cleaned up in the background.
+	// cleanupTmp lazily detaches the temporary root mount and removes its
+	// mountpoint directory. A lazy (MNT_DETACH) unmount is used because a plain
+	// synchronous umount of an alinas(NFS/TLS) mount blocks for ~3s in the kernel
+	// (nfs_free_server -> synchronize_rcu). MNT_DETACH removes the mount from the
+	// namespace immediately and lets the kernel finish the teardown in the
+	// background, so it stays off the NodePublishVolume critical path. The bind
+	// mount created below keeps its own reference to the underlying filesystem,
+	// so detaching the temporary root does not affect the target mount.
 	cleanupTmp := func() {
-		if err := cleanupMountpoint(m, tmpPath); err != nil {
-			klog.Errorf("failed to cleanup tmp mountpoint %s: %v", tmpPath, err)
+		if err := unix.Unmount(tmpPath, unix.MNT_DETACH); err != nil {
+			klog.Errorf("failed to lazily unmount tmp mountpoint %s: %v", tmpPath, err)
 		}
 		if err := os.Remove(tmpPath); err != nil {
 			klog.Errorf("failed to remove tmp path %s: %v", tmpPath, err)
 		}
 	}
 	if err := os.MkdirAll(filepath.Join(tmpPath, relPath), os.ModePerm); err != nil {
-		go cleanupTmp()
+		cleanupTmp()
 		return err
 	}
-	err = m.ExtendedMount(context.Background(), &mounter.MountOperation{
-		Source:   source,
-		Target:   targetPath,
-		FsType:   mountFstype,
-		Options:  combinedOptions,
-		Secrets:  secrets,
-		VolumeID: volumeId,
-	})
-	go cleanupTmp()
-	return err
+	// Bind mount the freshly created subpath directory (living under the
+	// temporary root mount) onto the real target. This reuses the existing
+	// alinas mount instead of performing a second full alinas(NFS/TLS) mount,
+	// and completes in milliseconds. The temporary root mount is then lazily
+	// detached; the bind keeps the target valid.
+	subPath := filepath.Join(tmpPath, relPath)
+	if err := unix.Mount(subPath, targetPath, "", unix.MS_BIND, ""); err != nil {
+		cleanupTmp()
+		return fmt.Errorf("failed to bind mount subpath %s to %s: %w", subPath, targetPath, err)
+	}
+	cleanupTmp()
+	return nil
 }
 
 func getMountRootAndRelPath(mountFsType string, opt *Options) (rootSource, relPath string) {
