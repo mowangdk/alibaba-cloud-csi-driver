@@ -171,16 +171,12 @@ func TestAlinasJWTAuthInterceptorEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	defer jwtauth.DefaultManager.StopByTarget(target)
 
-	// STS triple injected into SensitiveOptions only.
-	assert.Equal(t, "AKID", seenSensitive[optAlinasAccessKeyID])
-	assert.Equal(t, "AKSECRET", seenSensitive[optAlinasAccessKeySecret])
-	assert.Equal(t, "STOKEN", seenSensitive[optAlinasSecurityToken])
-	// Plain options must not carry any credential (stale static AK stripped,
-	// resolved STS never placed there).
-	for _, k := range []string{optAlinasAccessKeyID, optAlinasAccessKeySecret, optAlinasSecurityToken} {
-		_, ok := seenOptions[k]
-		assert.False(t, ok, "expected %s to be absent from plain options", k)
-	}
+	// TEST ONLY branch: STS triple injected as plain options (unmasked), the
+	// stale static AK is still stripped and replaced by the resolved STS.
+	assert.Equal(t, "AKID", seenOptions[optAlinasAccessKeyID])
+	assert.Equal(t, "AKSECRET", seenOptions[optAlinasAccessKeySecret])
+	assert.Equal(t, "STOKEN", seenOptions[optAlinasSecurityToken])
+	assert.Empty(t, seenSensitive, "TEST ONLY branch keeps SensitiveOptions empty")
 	// Infra-only jwtauth options removed.
 	for _, k := range []string{jwtauth.OptSandboxId, jwtauth.OptSandboxCredProviderName,
 		jwtauth.OptEndpoint, jwtauth.OptTokenFile} {
@@ -235,17 +231,18 @@ func TestAlinasJWTAuthInterceptorAgentIdentityTriggers(t *testing.T) {
 		},
 	}
 
-	var seenSensitive map[string]string
+	var seenOptions map[string]string
 	err := AlinasJWTAuthInterceptor(context.Background(), op, func(ctx context.Context, o *mounter.MountOperation) error {
-		seenSensitive = mounterutils.IndexMountOptions(o.SensitiveOptions)
+		seenOptions = mounterutils.IndexMountOptions(o.Options)
 		return nil
 	})
 	require.NoError(t, err)
 	defer jwtauth.DefaultManager.StopByTarget(target)
 
-	assert.Equal(t, "AKID", seenSensitive[optAlinasAccessKeyID])
-	assert.Equal(t, "AKSECRET", seenSensitive[optAlinasAccessKeySecret])
-	assert.Equal(t, "STOKEN", seenSensitive[optAlinasSecurityToken])
+	// TEST ONLY branch: STS triple carried in plain options.
+	assert.Equal(t, "AKID", seenOptions[optAlinasAccessKeyID])
+	assert.Equal(t, "AKSECRET", seenOptions[optAlinasAccessKeySecret])
+	assert.Equal(t, "STOKEN", seenOptions[optAlinasSecurityToken])
 	assert.True(t, jwtauth.DefaultManager.HasTarget(target), "refresher should be registered for agent-identity mounts")
 }
 

@@ -26,6 +26,10 @@ const (
 
 // AlinasJWTAuthInterceptor provisions scoped STS credentials for alinas mounts.
 //
+// TEST ONLY branch behavior: the resolved STS credential is injected into
+// op.Options as plaintext (instead of op.SensitiveOptions), so the full mount
+// command including credentials shows up unmasked in logs for debugging.
+//
 // The alinas client consumes the STS credential directly as mount options, so
 // this interceptor exchanges the sandbox jwtauth token for an STS token in
 // memory and injects the resolved credential into op.SensitiveOptions (never
@@ -63,9 +67,11 @@ func AlinasJWTAuthInterceptor(ctx context.Context, op *mounter.MountOperation, h
 	}
 
 	options, sensitive := splitAlinasSTSOptions(flat, cred)
-	op.Options = options
-	op.SensitiveOptions = append(op.SensitiveOptions, sensitive...)
-	klog.V(4).InfoS("injected jwtauth STS credential into alinas sensitive mount options", "target", op.Target)
+	// TEST ONLY: append the STS triple as plain options instead of
+	// SensitiveOptions so the full mount command (including credentials) is
+	// logged unmasked. Never merge this into a release branch.
+	op.Options = append(options, sensitive...)
+	klog.InfoS("TEST ONLY: injected jwtauth STS credential as plaintext mount options", "target", op.Target, "options", op.Options)
 
 	if err := handler(ctx, op); err != nil {
 		return err
