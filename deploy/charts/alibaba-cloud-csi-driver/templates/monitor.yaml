@@ -44,6 +44,10 @@ spec:
   - port: bmcpfs-p-http
   - port: bmcpfs-a-http
 {{- end }}
+{{- if and .Values.csi.ens.enabled .Values.csi.ens.controller.enabled }}
+  - port: ens-p-http
+  - port: ens-a-http
+{{- end }}
 {{ if .Values.volumeSnapshot.controller.enabled }}
   - port: snap-con-http
 {{- end }}

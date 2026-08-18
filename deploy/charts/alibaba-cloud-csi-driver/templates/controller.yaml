@@ -73,12 +73,16 @@ spec:
                   - csi-provisioner
               topologyKey: kubernetes.io/hostname
       tolerations:
+      {{- with .Values.controller.tolerations }}
+        {{- toYaml . | nindent 6 }}
+      {{- else }}
       - effect: NoSchedule
         operator: Exists
         key: node-role.kubernetes.io/master
       - effect: NoSchedule
         operator: Exists
         key: node-role.kubernetes.io/control-plane
+      {{- end }}
       serviceAccountName: alicloud-csi-provisioner
       priorityClassName: system-cluster-critical
       securityContext:
@@ -134,6 +138,10 @@ spec:
             - name: NAS_ENDPOINT
               value: {{ .Values.deploy.nasEndpoint | quote }}
 {{- end }}
+{{- if .Values.deploy.ensEndpoint }}
+            - name: ENS_ENDPOINT
+              value: {{ .Values.deploy.ensEndpoint | quote }}
+{{- end }}
 {{- if .Values.deploy.privateCloud }}
             - name: ALICLOUD_CLIENT_SCHEME
               value: HTTP
@@ -164,7 +172,7 @@ spec:
             - name: healthz
               containerPort: 11270
           volumeMounts:
-{{- range $key := tuple "disk" "nas" "oss" "bmcpfs" }}
+{{- range $key := tuple "disk" "nas" "oss" "bmcpfs" "ens" }}
   {{- with index $.Values.csi $key -}}
     {{- if and .enabled .controller.enabled }}
             - name: {{ $key }}-provisioner-dir
@@ -552,6 +560,78 @@ spec:
             readOnlyRootFilesystem: true
           volumeMounts:
             - name: bmcpfs-provisioner-dir
+              mountPath: /csi
+{{- end -}}
+{{- if and .Values.csi.ens.enabled .Values.csi.ens.controller.enabled }}
+        - name: external-ens-provisioner
+          image: {{ include "imageSpec" (list .Values "externalProvisioner") }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --http-endpoint=:8130
+            - --volume-name-prefix=ens
+            - --feature-gates=Topology=True
+            - --strict-topology=true
+            - --default-fstype=ext4
+            - --timeout=150s
+            - --leader-election=true
+            - --retry-interval-start=500ms
+            - --extra-create-metadata=true
+            - --kube-api-qps=100
+            - --kube-api-burst=200
+            - --v=5
+            - --logging-format={{ .Values.logging.format }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 500m
+              memory: 1024Mi
+          ports:
+            - containerPort: 8130
+              name: ens-p-http
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz/leader-election
+              port: ens-p-http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: ens-provisioner-dir
+              mountPath: /csi
+        - name: external-ens-attacher
+          image: {{ include "imageSpec" (list .Values "externalAttacher") }}
+          args:
+            - --v=5
+            - --logging-format={{ .Values.logging.format }}
+            - --csi-address=/csi/csi.sock
+            - --http-endpoint=:8131
+            - --leader-election=true
+            - --kube-api-qps=100
+            - --kube-api-burst=200
+            - --timeout=30s
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 500m
+              memory: 1024Mi
+          ports:
+            - containerPort: 8131
+              name: ens-a-http
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz/leader-election
+              port: ens-a-http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: ens-provisioner-dir
               mountPath: /csi
 {{- end -}}
 {{- if and .Values.csi.local.enabled .Values.csi.local.controller.enabled }}

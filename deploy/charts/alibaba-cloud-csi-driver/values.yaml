@@ -44,6 +44,11 @@ csi:
     enabled: false
     controller:
       enabled: true
+  # Alibaba Cloud Edge Node Service (ENS). Enable with values-ens.yaml.
+  ens:
+    enabled: false
+    controller:
+      enabled: true
 
 nodePools:
   default:
@@ -86,6 +91,10 @@ deploy:
   ecsEndpoint: null  # most useful on private cloud
   stsEndpoint: null  # most useful on private cloud
   nasEndpoint: null  # most useful on private cloud
+  # The ENS endpoint is per account site, not per region: the international site
+  # uses ens.ap-southeast-1.aliyuncs.com, all other sites use ens.aliyuncs.com,
+  # which is already the driver default.
+  ensEndpoint: null
 
   ack: true  # deployed on managed Alibaba Cloud Container Service for Kubernetes (ACK)
   ecs: true  # use Alibaba Cloud Elastic Compute Service (ECS) for Node

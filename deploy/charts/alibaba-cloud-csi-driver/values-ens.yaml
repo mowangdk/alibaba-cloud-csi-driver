@@ -1,0 +1,73 @@
+# Values for Alibaba Cloud Edge Node Service (ENS) clusters.
+#
+# ENS nodes are not ECS instances: every node lives in its own ENS region and is
+# identified by the alibabacloud.com/ens-instance-id label. The driver resolves
+# both the instance id and the region from that label, so csi-provisioner itself
+# must also be scheduled onto an ENS node.
+
+csi:
+  ens:
+    enabled: true
+    controller:
+      enabled: true
+  disk:
+    enabled: false
+  nas:
+    enabled: false
+  oss:
+    enabled: false
+
+deploy:
+  # ENS instances are not reachable over the ECS VPC network, so use the public
+  # image registry and let the SDK pick its default (public) endpoints.
+  ecs: false
+  # ENS clusters are provisioned with the legacy addon.csi.token secret.
+  ramToken: v1
+  # The ENS endpoint follows the account site, not the region. Set
+  # ens.ap-southeast-1.aliyuncs.com on the international site; leaving it null
+  # keeps the driver default ens.aliyuncs.com.
+  ensEndpoint: null
+
+# ENS disks support neither expansion nor snapshots.
+volumeSnapshot:
+  controller:
+    enabled: false
+defaultVolumeSnapshotClass:
+  enabled: false
+
+controller:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 1
+      preference:
+        matchExpressions:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+    - weight: 1
+      preference:
+        matchExpressions:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: alibabacloud.com/ens-instance-id
+          operator: Exists
+  tolerations:
+  - effect: NoSchedule
+    operator: Exists
+    key: node-role.kubernetes.io/master
+  - effect: NoSchedule
+    operator: Exists
+    key: node-role.kubernetes.io/control-plane
+  - effect: NoSchedule
+    operator: Exists
+    key: node.cloudprovider.kubernetes.io/uninitialized
+
+nodePools:
+  default:
+    pluginname: csi-ens-plugin
+    nodeSelectorTerms:
+      - matchExpressions:
+        - key: alibabacloud.com/ens-instance-id
+          operator: Exists

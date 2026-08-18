@@ -91,5 +91,20 @@ provisioner: localplugin.csi.alibabacloud.com
 reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: true
+{{- end }}
+{{- if .Values.csi.ens.enabled }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: alicloud-ensdisk-available
+# "available" makes the driver try cloud_efficiency, cloud_ssd, local_hdd then
+# local_ssd in order, since ENS regions differ in which categories they offer.
+parameters:
+  type: available
+  fsType: ext4
+provisioner: ensplugin.csi.alibabacloud.com
+reclaimPolicy: Delete
+allowVolumeExpansion: false
 {{- end -}}
 {{- end -}}

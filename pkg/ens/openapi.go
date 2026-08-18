@@ -3,14 +3,28 @@
 package ens
 
 import (
+	"os"
+
 	http "github.com/alibabacloud-go/darabonba-openapi/client"
 	ensCli "github.com/alibabacloud-go/ens-20171110/v3/client"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/credentials"
 	"k8s.io/klog/v2"
 )
 
+const defaultENSEndpoint = "ens.aliyuncs.com"
+
 type ENSClient struct {
 	c *ensCli.Client
+}
+
+// ensEndpoint resolves the ENS OpenAPI endpoint. It cannot be derived from
+// RegionID because RegionID is itself resolved through DescribeInstance, so the
+// international site must set ENS_ENDPOINT explicitly.
+func ensEndpoint() string {
+	if ep := os.Getenv("ENS_ENDPOINT"); ep != "" {
+		return ep
+	}
+	return defaultENSEndpoint
 }
 
 func newENSClient() ENSClient {
@@ -19,8 +33,11 @@ func newENSClient() ENSClient {
 		klog.Fatalf("newENSClient: failed to create credential: %+v", err)
 	}
 
+	endpoint := ensEndpoint()
+	klog.Infof("newENSClient: using ENS endpoint %s", endpoint)
+
 	config := http.Config{
-		Endpoint:   new("ens.aliyuncs.com"),
+		Endpoint:   new(endpoint),
 		Credential: cred,
 	}
 
