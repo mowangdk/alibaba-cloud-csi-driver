@@ -18,6 +18,8 @@ import (
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/interceptors"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/proxy"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/proxy/server"
+	mounterutils "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/utils"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/utils/agentidentity"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	"k8s.io/mount-utils"
@@ -78,9 +80,25 @@ func (h *Driver) Mount(ctx context.Context, req *proxy.MountRequest) error {
 
 func (h *Driver) Init() {}
 
-// ApplyOptionDefaults applies driver-specific option defaults.
-// ossfs2 does not support agent identity auth, so no defaults are applied.
+// ApplyOptionDefaults applies driver-specific option defaults to mount options.
+// Rules are divided into:
+//   - Append: add option only if not already present (user options take precedence)
+//   - Override: force option value regardless of existing (system requirements take precedence)
 func (h *Driver) ApplyOptionDefaults(options []string) []string {
+	// --- Append rules: existing user options take precedence ---
+	var appends []string
+
+	// agent_identity_ca_file: only appended if configured and the file is readable.
+	if caPath := agentidentity.GetCAFilePath(); caPath != "" {
+		if unix.Access(caPath, unix.R_OK) == nil {
+			appends = append(appends, fmt.Sprintf("agent_identity_ca_file=%s", caPath))
+		}
+	}
+
+	if len(appends) > 0 {
+		options = mounterutils.MergeMountOptions(options, appends)
+	}
+
 	return options
 }
 

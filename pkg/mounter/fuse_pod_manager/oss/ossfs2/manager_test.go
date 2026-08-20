@@ -22,94 +22,95 @@ func TestPrecheckAuthConfig_ossfs2(t *testing.T) {
 	fakeMeta := metadata.NewMetadata()
 	fakeOssfs := NewFuseOssfs(utils.Config{}, fakeMeta)
 	tests := []struct {
-		name    string
-		opts    *ossfpm.Options
-		wantErr bool
+		name     string
+		opts     *ossfpm.Options
+		wantErr  bool
+		setupEnv func(t *testing.T)
 	}{
 		{
-			"invalid authtype",
-			&ossfpm.Options{
+			name: "invalid authtype",
+			opts: &ossfpm.Options{
 				AuthType: ossfpm.AuthTypeCSS,
 			},
-			true,
+			wantErr: true,
 		},
 		{
-			"valid sts",
-			&ossfpm.Options{
+			name: "valid sts",
+			opts: &ossfpm.Options{
 				AuthType: ossfpm.AuthTypeSTS,
 				RoleName: "test",
 			},
-			false,
+			wantErr: false,
 		},
 		{
-			"invalid sts",
-			&ossfpm.Options{
+			name: "invalid sts",
+			opts: &ossfpm.Options{
 				AuthType: ossfpm.AuthTypeSTS,
 			},
-			true,
+			wantErr: true,
 		},
 		{
-			"invalid rrsa",
-			&ossfpm.Options{
+			name: "invalid rrsa",
+			opts: &ossfpm.Options{
 				AuthType: ossfpm.AuthTypeRRSA,
 			},
-			true,
+			wantErr: true,
 		},
 		{
-			"valid rrsa",
-			&ossfpm.Options{
+			name: "valid rrsa",
+			opts: &ossfpm.Options{
 				AuthType: ossfpm.AuthTypeRRSA,
 				RoleName: "test",
 			},
-			false,
+			wantErr: false,
 		},
 		{
-			"use assumeRole with non-RRSA authType",
-			&ossfpm.Options{
+			name: "use assumeRole with non-RRSA authType",
+			opts: &ossfpm.Options{
 				AssumeRoleArn: "test-assume-role-arn",
 			},
-			true,
+			wantErr: true,
 		},
 		{
-			"empty aksecret",
-			&ossfpm.Options{
+			name: "empty aksecret",
+			opts: &ossfpm.Options{
 				AccessKey: ossfpm.AccessKey{
 					AkID:     "test-ak",
 					AkSecret: "",
 				},
 			},
-			true,
+			wantErr: true,
 		},
 		{
-			"success - aksk",
-			&ossfpm.Options{
+			name: "success - aksk",
+			opts: &ossfpm.Options{
 				AccessKey: ossfpm.AccessKey{
 					AkID:     "test-ak",
 					AkSecret: "test-ak-secret",
 				},
 			},
-			false,
+			wantErr: false,
 		},
 		{
-			"success - secretref",
-			&ossfpm.Options{
+			name: "success - secretref",
+			opts: &ossfpm.Options{
 				SecretRef: "test-secret-ref",
 			},
-			false,
+			wantErr: false,
 		},
 		{
-			"conflict between SecurityToken and SecretRef",
-			&ossfpm.Options{
+			name: "conflict between SecurityToken and SecretRef",
+			opts: &ossfpm.Options{
 				TokenSecret: ossfpm.TokenSecret{
 					SecurityToken: "token",
 				},
 				SecretRef: "secret",
 			},
-			true,
+			wantErr: true,
 		},
 		{
-			"conflict between SecurityToken and AccessKey",
-			&ossfpm.Options{
+			name: "conflict between SecurityToken and AccessKey",
+			opts: &ossfpm.Options{
 				AccessKey: ossfpm.AccessKey{
 					AkID: "11111",
 				},
@@ -117,27 +118,68 @@ func TestPrecheckAuthConfig_ossfs2(t *testing.T) {
 					SecurityToken: "token",
 				},
 			},
-			true,
+			wantErr: true,
 		},
 		{
-			"success with SecurityToken only",
-			&ossfpm.Options{
+			name: "success with SecurityToken only",
+			opts: &ossfpm.Options{
 				TokenSecret: ossfpm.TokenSecret{
 					AccessKeyId:     "akid",
 					AccessKeySecret: "aksecret",
 					SecurityToken:   "token",
 				},
 			},
-			false,
+			wantErr: false,
 		},
 		{
-			"success with RundCSIProtocol3 enabled",
-			&ossfpm.Options{},
-			false,
+			name:    "success with RundCSIProtocol3 enabled",
+			opts:    &ossfpm.Options{},
+			wantErr: false,
+		},
+		{
+			name: "agent-identity: missing sandboxId",
+			opts: &ossfpm.Options{
+				AuthType:                ossfpm.AuthTypeAgentIdentity,
+				SandboxCredProviderName: "aliyun-one",
+			},
+			wantErr: true,
+		},
+		{
+			name: "agent-identity: missing sandboxCredProviderName",
+			opts: &ossfpm.Options{
+				AuthType:  ossfpm.AuthTypeAgentIdentity,
+				SandboxId: "sandbox-123",
+			},
+			wantErr: true,
+		},
+		{
+			name: "agent-identity: env not set",
+			opts: &ossfpm.Options{
+				AuthType:                ossfpm.AuthTypeAgentIdentity,
+				SandboxId:               "sandbox-123",
+				SandboxCredProviderName: "aliyun-one",
+			},
+			wantErr: true,
+		},
+		{
+			name: "agent-identity: success",
+			opts: &ossfpm.Options{
+				AuthType:                ossfpm.AuthTypeAgentIdentity,
+				SandboxId:               "sandbox-123",
+				SandboxCredProviderName: "aliyun-one",
+			},
+			setupEnv: func(t *testing.T) {
+				t.Setenv("AGENT_IDENTITY_ENDPOINT", "https://a-endpoint-for-agent-identity.aliyuncs.com")
+				t.Setenv("AGENT_IDENTITY_TOKEN_DIR", "/a/path/to/agent-token")
+			},
+			wantErr: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.setupEnv != nil {
+				tt.setupEnv(t)
+			}
 			// Enable RundCSIProtocol3 for the specific test case
 			if tt.name == "success with RundCSIProtocol3 enabled" {
 				err := features.FunctionalMutableFeatureGate.Set(fmt.Sprintf("%s=true", features.RundCSIProtocol3))
@@ -257,6 +299,22 @@ func TestMakeAuthConfig_ossfs2(t *testing.T) {
 			},
 			false,
 		},
+		{
+			"AuthTypeAgentIdentity",
+			&ossfpm.Options{
+				AuthType:                ossfpm.AuthTypeAgentIdentity,
+				SandboxId:               "sandbox-123",
+				SandboxCredProviderName: "aliyun-one",
+			},
+			&fpm.AuthConfig{
+				AuthType: ossfpm.AuthTypeAgentIdentity,
+				AgentIdentityConfig: &fpm.AgentIdentityConfig{
+					CredProviderName: "aliyun-one",
+					SandboxId:        "sandbox-123",
+				},
+			},
+			false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -274,6 +332,7 @@ func TestMakeMountOptions_ossfs2(t *testing.T) {
 		region        string
 		expected      []string
 		expectedError bool
+		setupEnv      func(t *testing.T)
 	}{
 		{
 			name: "ro",
@@ -467,9 +526,35 @@ func TestMakeMountOptions_ossfs2(t *testing.T) {
 				"agentic_bucket=my-agentic-xxx-ab-apsr",
 			},
 		},
+		{
+			name: "AuthTypeAgentIdentity",
+			opts: &ossfpm.Options{
+				Bucket:                  "test-bucket",
+				Path:                    "/",
+				URL:                     "oss://test-bucket/",
+				AuthType:                ossfpm.AuthTypeAgentIdentity,
+				SandboxId:               "sandbox-123",
+				SandboxCredProviderName: "aliyun-one",
+			},
+			expected: []string{
+				"oss_endpoint=oss://test-bucket/",
+				"oss_bucket=test-bucket",
+				"oss_bucket_prefix=/",
+				"agent_identity_endpoint=https://a-endpoint-for-agent-identity.aliyuncs.com",
+				"agent_identity_token_file=/a/path/to/agent-token/sandbox-123.token",
+				"agent_identity_cred_provider=aliyun-one",
+			},
+			setupEnv: func(t *testing.T) {
+				t.Setenv("AGENT_IDENTITY_ENDPOINT", "https://a-endpoint-for-agent-identity.aliyuncs.com")
+				t.Setenv("AGENT_IDENTITY_TOKEN_DIR", "/a/path/to/agent-token")
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.setupEnv != nil {
+				tt.setupEnv(t)
+			}
 			t.Setenv("REGION_ID", tt.region)
 			fakeMeta := metadata.NewMetadata()
 			fakeOssfs := NewFuseOssfs(utils.Config{}, fakeMeta)
@@ -561,6 +646,7 @@ func TestGetAuthOpttions_ossfs2(t *testing.T) {
 		name        string
 		opts        *ossfpm.Options
 		wantOptions []string
+		setupEnv    func(t *testing.T)
 	}{
 		{
 			name: "secretref",
@@ -622,9 +708,29 @@ func TestGetAuthOpttions_ossfs2(t *testing.T) {
 			},
 			wantOptions: nil, // Returns nil as passwd_file option is made in mount-proxy server
 		},
+		{
+			name: "agent-identity",
+			opts: &ossfpm.Options{
+				AuthType:                ossfpm.AuthTypeAgentIdentity,
+				SandboxId:               "sandbox-123",
+				SandboxCredProviderName: "aliyun-one",
+			},
+			wantOptions: []string{
+				"agent_identity_endpoint=https://a-endpoint-for-agent-identity.aliyuncs.com",
+				"agent_identity_token_file=/a/path/to/agent-token/sandbox-123.token",
+				"agent_identity_cred_provider=aliyun-one",
+			},
+			setupEnv: func(t *testing.T) {
+				t.Setenv("AGENT_IDENTITY_ENDPOINT", "https://a-endpoint-for-agent-identity.aliyuncs.com")
+				t.Setenv("AGENT_IDENTITY_TOKEN_DIR", "/a/path/to/agent-token")
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.setupEnv != nil {
+				tt.setupEnv(t)
+			}
 			fakeOssfs := &fuseOssfs{}
 			opts := fakeOssfs.getAuthOptions(tt.opts, "cn-hangzhou")
 			assert.Equal(t, tt.wantOptions, opts)
@@ -720,4 +826,29 @@ func TestBuildAuthSpec_ossfs2(t *testing.T) {
 	volumeMount = container.VolumeMounts[len(container.VolumeMounts)-1]
 	assert.Contains(t, "/var/run/secrets/ack.alibabacloud.com/rrsa-tokens", volumeMount.MountPath)
 	assert.Contains(t, "rrsa-oidc-token", volumeMount.Name)
+
+	// Test agent identity - should be a no-op (no volumes/mounts added)
+	spec = corev1.PodSpec{}
+	spec.Volumes = []corev1.Volume{targetVolume}
+	initialVolumeCount := len(spec.Volumes)
+	initialMountCount := len(container.VolumeMounts)
+	agentIdentityCfg := &fpm.AuthConfig{
+		AuthType: ossfpm.AuthTypeAgentIdentity,
+		AgentIdentityConfig: &fpm.AgentIdentityConfig{
+			CredProviderName: "aliyun-one",
+			SandboxId:        "sandbox-123",
+		},
+	}
+	fakeOssfs.buildAuthSpec(&fpm.FusePodContext{
+		Context:    context.Background(),
+		Namespace:  mounterutils.LegacyFusePodNamespace,
+		NodeName:   nodeName,
+		VolumeId:   volumeId,
+		AuthConfig: agentIdentityCfg,
+		FuseType:   "ossfs2",
+	}, "target", &spec, &container)
+
+	// Agent identity is sandbox-only; no volumes/mounts should be added
+	assert.Equal(t, initialVolumeCount, len(spec.Volumes), "agent identity should not add volumes")
+	assert.Equal(t, initialMountCount, len(container.VolumeMounts), "agent identity should not add volume mounts")
 }
