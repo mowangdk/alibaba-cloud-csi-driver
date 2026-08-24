@@ -10,6 +10,6 @@ const (
 	DriverName = "povplugin.csi.alibabacloud.com"
 )
 
-func NewServers(meta *metadata.Metadata, endpoint string, serviceType utils.ServiceType) *common.Servers {
+func NewServers(_ *metadata.Metadata, _ string, _ utils.ServiceType) []common.NamedServer {
 	panic("POV driver is not supported on Windows")
 }
