@@ -99,7 +99,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		resp.Volume.VolumeContext["options"] = options
 	}
 	if sysConfigs != "" {
-		resp.Volume.VolumeContext["sysConfigs"] = sysConfigs
+		resp.Volume.VolumeContext["sysConfig"] = sysConfigs
 	}
 
 	klog.V(2).InfoS("CreateVolume: succeeded", "response", resp)
