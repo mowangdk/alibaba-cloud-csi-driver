@@ -126,6 +126,10 @@ spec:
             - name: STS_ENDPOINT
               value: {{ $nodePool.deploy.stsEndpoint | quote }}
 {{- end }}
+{{- if $nodePool.deploy.ensEndpoint }}
+            - name: ENS_ENDPOINT
+              value: {{ $nodePool.deploy.ensEndpoint | quote }}
+{{- end }}
 {{- if $nodePool.deploy.privateCloud }}
             - name: ALICLOUD_CLIENT_SCHEME
               value: HTTP
@@ -167,7 +171,7 @@ spec:
               # keep the trailing slash to be compatible with old ACK installations
               mountPath: {{ print (clean $nodePool.deploy.kubeletRootDir) "/" | quote }}
               mountPropagation: "Bidirectional"
-{{- range $key := tuple "disk" "nas" "oss" "bmcpfs" }}
+{{- range $key := tuple "disk" "nas" "oss" "bmcpfs" "ens" }}
   {{- with index $nodePool.csi $key -}}
     {{- if .enabled }}
             - name: {{ $key }}-plugin-dir
