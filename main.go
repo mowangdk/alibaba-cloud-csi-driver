@@ -268,7 +268,20 @@ func main() {
 			case ExtenderAgent:
 				klog.Fatalf("rund-csi protocol 1.0 is no longer supported.")
 			case TypePluginPOV:
-				driver = pov.NewServers(meta, endpoint, serviceType)
+				// The POV driver serves two CSI driver names (povplugin and
+				// kvcsplugin), each on its own endpoint.
+				for _, s := range pov.NewServers(meta, endpoint, serviceType) {
+					driverType := strings.TrimSuffix(s.DriverName, TypePluginSuffix)
+					server := common.NewCSIServer(driverType, s.Servers)
+					wg.Go(func() {
+						common.Serve(server, s.Endpoint)
+					})
+					wg.Go(func() {
+						<-ctx.Done()
+						server.Stop()
+					})
+				}
+				continue
 			case TypePluginBMCPFS:
 				driver = bmcpfs.NewServers(meta, endpoint, serviceType)
 			default:

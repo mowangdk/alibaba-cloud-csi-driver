@@ -11,10 +11,10 @@ type identityServer struct {
 	common.GenericIdentityServer
 }
 
-func newIdentityServer() *identityServer {
+func newIdentityServer(driverName string) *identityServer {
 	return &identityServer{
 		GenericIdentityServer: common.GenericIdentityServer{
-			Name: DriverName,
+			Name: driverName,
 		},
 	}
 }

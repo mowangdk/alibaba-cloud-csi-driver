@@ -22,6 +22,14 @@ type Servers struct {
 	GroupControllerServer csi.GroupControllerServer
 }
 
+// NamedServer binds a CSI server implementation to a driver name and an
+// endpoint, so that one driver can serve multiple CSI driver names.
+type NamedServer struct {
+	DriverName string
+	Endpoint   string
+	Servers    *Servers
+}
+
 func ParseEndpoint(ep string) (string, string, error) {
 	if strings.HasPrefix(strings.ToLower(ep), "unix://") || strings.HasPrefix(strings.ToLower(ep), "tcp://") {
 		s := strings.SplitN(ep, "://", 2)
