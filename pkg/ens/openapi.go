@@ -3,6 +3,7 @@
 package ens
 
 import (
+	"fmt"
 	"os"
 
 	http "github.com/alibabacloud-go/darabonba-openapi/client"
@@ -105,6 +106,9 @@ func (ec *ENSClient) DescribeVolume(diskID string) (*ensCli.DescribeDisksRespons
 	if err != nil {
 		klog.Errorf("DescribeVolume: describe volume failed err: %+v", err)
 		return nil, err
+	}
+	if resp.Body == nil || resp.Body.Disks == nil || len(resp.Body.Disks.Disks) == 0 {
+		return nil, fmt.Errorf("DescribeVolume: no disk %s found in region %s, response: %s", diskID, GlobalConfigVar.RegionID, resp)
 	}
 	return resp.Body.Disks.Disks[0], nil
 }
