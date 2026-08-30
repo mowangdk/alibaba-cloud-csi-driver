@@ -643,8 +643,9 @@ func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 	klog.Infof("ControllerExpandVolume:: Starting expand disk with: %v", req)
 
 	// check resize conditions
-	volSizeBytes := int64(req.GetCapacityRange().GetRequiredBytes())
-	requestGB := int((volSizeBytes + 1024*1024*1024 - 1) / (1024 * 1024 * 1024))
+	volSizeBytes := req.GetCapacityRange().GetRequiredBytes()
+	const gi = 1 << 30
+	requestGB := int((volSizeBytes-1)/gi + 1)
 	diskID := req.VolumeId
 
 	disk, err := findDiskByID(diskID, cs.ecs)
@@ -658,11 +659,11 @@ func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 	}
 	if requestGB == disk.Size {
 		klog.Infof("ControllerExpandVolume:: expect size is same with current: %s, size: %dGi", req.VolumeId, requestGB)
-		return &csi.ControllerExpandVolumeResponse{CapacityBytes: volSizeBytes, NodeExpansionRequired: true}, nil
+		return &csi.ControllerExpandVolumeResponse{CapacityBytes: int64(disk.Size) * gi, NodeExpansionRequired: true}, nil
 	}
 	if requestGB < disk.Size {
 		klog.Infof("ControllerExpandVolume:: expect size is less than current: %d, expected: %d, disk: %s", disk.Size, requestGB, req.VolumeId)
-		return &csi.ControllerExpandVolumeResponse{CapacityBytes: volSizeBytes, NodeExpansionRequired: true}, nil
+		return &csi.ControllerExpandVolumeResponse{CapacityBytes: int64(disk.Size) * gi, NodeExpansionRequired: true}, nil
 	}
 
 	// do resize
@@ -684,13 +685,13 @@ func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 		klog.Infof("ControllerExpandVolume:: find disk failed with error: %+v", err)
 		return nil, status.Errorf(codes.Internal, "ControllerExpandVolume:: find disk failed with error: %+v", err)
 	}
-	if requestGB != checkDisk.Size {
+	if checkDisk.Size < requestGB {
 		klog.Infof("ControllerExpandVolume:: resize disk err with excepted size: %vGB, actual size: %vGB", requestGB, checkDisk.Size)
 		return nil, status.Errorf(codes.Internal, "resize disk err with excepted size: %vGB, actual size: %vGB", requestGB, checkDisk.Size)
 	}
 
 	klog.Infof("ControllerExpandVolume:: Success to resize volume: %s from %dG to %dG, RequestID: %s", req.VolumeId, disk.Size, requestGB, response.RequestId)
-	return &csi.ControllerExpandVolumeResponse{CapacityBytes: volSizeBytes, NodeExpansionRequired: true}, nil
+	return &csi.ControllerExpandVolumeResponse{CapacityBytes: int64(checkDisk.Size) * gi, NodeExpansionRequired: true}, nil
 }
 
 func newListSnapshotsResponse(snapshots []ecs.Snapshot, nextToken string) (*csi.ListSnapshotsResponse, error) {
