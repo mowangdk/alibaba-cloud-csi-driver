@@ -55,6 +55,7 @@ OSSFS2_RPM_VERSION=$(echo "${OSSFS2_IMAGE_TAG}" | sed 's/-[^-]*$//')
 
 # Extract ALINAS and EFC versions from VERSIONS file
 ALINAS_RPM_BASE_URL=$(grep "^ALINAS_RPM_BASE_URL=" "${VERSIONS_FILE}" | cut -d'=' -f2-)
+ALINAS_UTILS_RPM_BASE_URL=$(grep "^ALINAS_UTILS_RPM_BASE_URL=" "${VERSIONS_FILE}" | cut -d'=' -f2-)
 ALINAS_UTILS_VERSION=$(grep "^ALINAS_UTILS_VERSION=" "${VERSIONS_FILE}" | cut -d'=' -f2)
 EFC_VERSION=$(grep "^EFC_VERSION=" "${VERSIONS_FILE}" | cut -d'=' -f2)
 
