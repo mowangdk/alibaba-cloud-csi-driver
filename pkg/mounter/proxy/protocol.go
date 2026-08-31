@@ -31,6 +31,17 @@ const ErrTargetNotManaged = "target not managed by mount broker"
 
 type Header struct {
 	Method Method `json:"method,omitempty"`
+
+	// DeadlineUnixNano is when the caller stops waiting, letting the server
+	// bound a mount so the error gets back instead of the caller's own
+	// deadline firing first. Zero means the caller set none, and the server
+	// falls back to its connection timeout.
+	//
+	// A wall clock is meaningful here only because both ends share a kernel;
+	// this is not a field to reuse over a network.
+	//
+	// Forward-compatible: old mount-proxy-server versions ignore unknown JSON fields.
+	DeadlineUnixNano int64 `json:"deadlineUnixNano,omitempty"`
 }
 
 type Request struct {

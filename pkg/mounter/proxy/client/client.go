@@ -12,11 +12,6 @@ import (
 	"k8s.io/klog/v2"
 )
 
-const (
-	// this should be longer than default timeout in server
-	defaultTimeout = time.Second * 35
-)
-
 type client struct {
 	timeout time.Duration
 	raddr   net.UnixAddr
@@ -26,7 +21,7 @@ type client struct {
 func NewClient(socketPath string) *client {
 	return &client{
 		raddr:   net.UnixAddr{Name: socketPath, Net: "unix"},
-		timeout: defaultTimeout,
+		timeout: proxy.ClientFallbackTimeout,
 	}
 }
 
@@ -43,10 +38,15 @@ func (c *client) doRequest(ctx context.Context, req *proxy.Request) (*proxy.Resp
 	}
 	defer closeConn()
 
+	// State when we stop waiting, so the server can bound the mount below it
+	// instead of comparing its own timeout against ours. Applying the fallback
+	// first means the header is set either way, including for the ctx-less
+	// callers described in proxy/deadline.go.
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	deadline, ok := ctx.Deadline()
 	if ok {
+		req.Header.DeadlineUnixNano = deadline.UnixNano()
 		if err := conn.SetDeadline(deadline); err != nil {
 			return nil, fmt.Errorf("set deadline: %w", err)
 		}
