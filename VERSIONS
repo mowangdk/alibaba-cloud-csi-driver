@@ -17,7 +17,7 @@ OSSFS_IMAGE_TAG=v1.91.12.ack.2-5cf3371
 # OSSFS2 image tag (used in Helm values and Go code)
 # Format: v<version>-<commit_hash>
 # The RPM version (v<version>) will be extracted automatically
-OSSFS2_IMAGE_TAG=v2.0.9.ack.2-4094fc0
+OSSFS2_IMAGE_TAG=v2.0.9.ack.3-a1f29fc
 
 # ALINAS and EFC Version Configuration
 # This file is the single source of truth for alinas-utils and efc RPM package versions.
@@ -25,7 +25,7 @@ OSSFS2_IMAGE_TAG=v2.0.9.ack.2-4094fc0
 # - build/mount-proxy/Dockerfile (ALINAS_UTILS_VERSION, EFC_VERSION, ALINAS_RPM_BASE_URL ARG defaults)
 
 # Base URL for ALINAS/EFC RPM packages (includes version path)
-ALINAS_RPM_BASE_URL=https://aliyun-alinas-eac.oss-cn-beijing.aliyuncs.com/efc-release/2.4/
+ALINAS_RPM_BASE_URL=https://aliyun-alinas-eac.oss-cn-beijing.aliyuncs.com/efc-release/2.4
 
 # ALINAS Utils version (used in Dockerfile for yum install)
 ALINAS_UTILS_VERSION=2.4-0.20260813143608.fcc94d.generic

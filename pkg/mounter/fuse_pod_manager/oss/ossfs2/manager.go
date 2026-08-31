@@ -70,6 +70,10 @@ func (f *fuseOssfs) PrecheckAuthConfig(o *ossfpm.Options, onNode bool) error {
 		if onNode && o.RoleName == "" {
 			return fmt.Errorf("missing roleName or ramRole in volume attributes")
 		}
+	case ossfpm.AuthTypeAgentIdentity:
+		if err := ossfpm.ValidateAgentIdentity(o); err != nil {
+			return err
+		}
 	case "":
 		if features.FunctionalMutableFeatureGate.Enabled(features.RundCSIProtocol3) {
 			return nil
@@ -110,6 +114,8 @@ func (f *fuseOssfs) MakeAuthConfig(o *ossfpm.Options, m metadata.MetadataProvide
 		authCfg.RrsaConfig = rrsaCfg
 	case ossfpm.AuthTypeSTS:
 		authCfg.RoleName = o.RoleName
+	case ossfpm.AuthTypeAgentIdentity:
+		authCfg.AgentIdentityConfig = ossfpm.MakeAgentIdentityConfig(o)
 	case "":
 		// fixed credentials
 		if o.AkID != "" && o.AkSecret != "" {
@@ -205,6 +211,8 @@ func (f *fuseOssfs) getAuthOptions(o *ossfpm.Options, region string) (mountOptio
 		if o.RoleName != "" {
 			mountOptions = append(mountOptions, "ram_role="+o.RoleName)
 		}
+	case ossfpm.AuthTypeAgentIdentity:
+		mountOptions = append(mountOptions, ossfpm.GetAgentIdentityOptions(o)...)
 	case "":
 		// fixed credentials
 		if o.AkID != "" && o.AkSecret != "" {
@@ -406,6 +414,8 @@ func (f *fuseOssfs) buildAuthSpec(c *fpm.FusePodContext, target string, spec *co
 			},
 		}
 		container.Env = append(container.Env, envs...)
+	case ossfpm.AuthTypeAgentIdentity:
+		// agent identity is sandbox-only; token/CA files are placed by an external controller
 	case "":
 		secretVolumeSource := ossfpm.GetPasswdSecretVolume(authCfg.SecretRef, c.FuseType)
 		if secretVolumeSource != nil {
