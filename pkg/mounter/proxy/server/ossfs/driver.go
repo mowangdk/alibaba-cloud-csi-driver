@@ -135,7 +135,14 @@ type extendedMounter struct {
 
 var _ mounter.Mounter = &extendedMounter{}
 
+// newMountCmd builds the ossfs command. It is a package variable so tests can
+// drive ExtendedMount with a stand-in process instead of a real ossfs binary.
+var newMountCmd = func(args ...string) *exec.Cmd {
+	return exec.Command("ossfs", args...)
+}
+
 func (m *extendedMounter) ExtendedMount(ctx context.Context, op *mounter.MountOperation) error {
+	startTime := time.Now()
 	logger := klog.FromContext(ctx)
 	options := m.driver.ApplyOptionDefaults(op.Options)
 	target := op.Target
@@ -147,7 +154,7 @@ func (m *extendedMounter) ExtendedMount(ctx context.Context, op *mounter.MountOp
 	var stderrBuf bytes.Buffer
 	multiWriter := io.MultiWriter(os.Stderr, &stderrBuf)
 	sw := server.NewSwitchableWriter(multiWriter)
-	cmd := exec.Command("ossfs", args...)
+	cmd := newMountCmd(args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = sw
 	defer func() {
@@ -224,17 +231,19 @@ func (m *extendedMounter) ExtendedMount(ctx context.Context, op *mounter.MountOp
 	}
 
 	if wait.Interrupted(err) {
+		err = fmt.Errorf("ossfs mount timeout after %s, pid=%d, mountpoint=%s, process terminated with SIGTERM, check network connectivity",
+			time.Since(startTime).Round(time.Second), pid, target)
 		// terminate ossfs process when timeout
 		terr := cmd.Process.Signal(syscall.SIGTERM)
 		if terr != nil {
-			logger.Error(err, "Failed to terminate ossfs", "pid", pid)
+			logger.Error(err, "Failed to terminate ossfs", "pid", pid, "signalErr", terr)
 		}
 		select {
 		case <-ossfsExited:
-		case <-time.After(time.Second * 2):
+		case <-time.After(proxy.MountShutdownGrace):
 			kerr := cmd.Process.Kill()
 			if kerr != nil && !errors.Is(kerr, os.ErrProcessDone) {
-				logger.Error(err, "Failed to kill ossfs", "pid", pid)
+				logger.Error(err, "Failed to kill ossfs", "pid", pid, "killErr", kerr)
 			}
 		}
 	}

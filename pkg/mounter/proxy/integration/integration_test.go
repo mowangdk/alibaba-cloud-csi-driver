@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -20,7 +21,11 @@ const testTimeout = time.Second * 5
 func newTestServer(t *testing.T) string {
 	t.Helper()
 
-	dir := t.TempDir()
+	// Not t.TempDir(): its name carries the test's, and a unix socket path is
+	// capped at 104 bytes on darwin, which long test names overrun.
+	dir, err := os.MkdirTemp("", "px")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socketPath := filepath.Join(dir, "mounter.sock")
 
 	addr := net.UnixAddr{Name: socketPath, Net: "unix"}

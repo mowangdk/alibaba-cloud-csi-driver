@@ -15,6 +15,7 @@ import (
 	flag "github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
 
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/proxy"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/proxy/server"
 	_ "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/proxy/server/alinas"
 	_ "github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/proxy/server/ossfs"
@@ -34,7 +35,8 @@ var (
 func main() {
 	flag.StringVar(&socketPath, "socket", "/var/run/csi/mounter.sock", "socket path")
 	flag.StringSliceVar(&drivers, "driver", nil, "drivers to enable (e.g. 'ossfs,alinas')")
-	flag.DurationVar(&handleTimeout, "timeout", time.Second*30, "timeout for connection")
+	flag.DurationVar(&handleTimeout, "timeout", proxy.DefaultConnectionTimeout,
+		"how long a connection has to deliver a request and receive its answer; also caps a mount when shorter than what the client asks for")
 	flag.BoolVar(&enableNftables, "enable-nftables", false, "enable nftables rules to restrict mount proxy port access (default: false)")
 	flag.BoolVar(&cleanupNASMounts, "cleanup-nas-mounts-on-exit", false, "unmount all NAS mount points inside the pod on SIGTERM")
 	utils.AddKlogFlags(flag.CommandLine)

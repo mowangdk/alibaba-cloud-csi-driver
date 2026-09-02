@@ -29,11 +29,20 @@ func Handle(conn *net.UnixConn, timeout time.Duration, seq int64) error {
 	err := proxy.ReadMsg(conn, &req)
 	logger.V(4).Info("finished recvmsg")
 
-	ctx, cancel := context.WithDeadline(ctx, deadline)
+	// The connection keeps the timeout it was given so the answer still has a
+	// window to be written; the work stops earlier. See proxy/deadline.go.
+	var stated time.Time
+	if req.Header.DeadlineUnixNano > 0 {
+		stated = time.Unix(0, req.Header.DeadlineUnixNano)
+	}
+	workDeadline := proxy.ResolveWorkDeadline(time.Now(), stated, deadline)
+	logger.V(4).Info("resolved work deadline", "workDeadline", workDeadline, "stated", stated)
+
+	ctx, cancel := context.WithDeadline(ctx, workDeadline)
 	defer cancel()
 	ctx, cancelCause := context.WithCancelCause(ctx)
 
-	if err := conn.SetDeadline(deadline.Add(5 * time.Second)); err != nil { // If we already have a response, we want to send it if we can
+	if err := conn.SetDeadline(deadline.Add(proxy.ResponseWriteWindow)); err != nil {
 		logger.Error(err, "set write deadline")
 	}
 	go func() {
