@@ -107,7 +107,7 @@ ENTRYPOINT ["csi-mount-proxy-server", "--driver=ossfs2"]
 FROM alinux-install AS alinas
 
 ARG TARGETPLATFORM
-ARG ALINAS_UTILS_VERSION=2.4-0.20260813143608.fcc94d.generic
+ARG ALINAS_UTILS_VERSION=2.4-0.20260825141903.98d7f7.generic
 ARG EFC_VERSION=2.4-20260817135527.cb17f4.5b35e56.release
 ARG ALINAS_RPM_BASE_URL=https://aliyun-alinas-eac.oss-cn-beijing.aliyuncs.com/efc-release/2.4
 
@@ -119,7 +119,7 @@ RUN --mount=type=bind,from=rpm-builder,source=/root/rpmbuild/RPMS/noarch,target=
         linux/arm64) ARCH="aarch64" ;; \
         *) echo "unsupported platform"; exit 1 ;; \
     esac; \
-    yum install -y /tmp/rpms/python3-provider-*.rpm util-linux procps tini; \
+    yum install -y /tmp/rpms/python3-provider-*.rpm util-linux procps tini openssl; \
     yum install -y ${ALINAS_RPM_BASE_URL}/aliyun-alinas-utils-${ALINAS_UTILS_VERSION}.${ARCH}.rpm; \
     yum install -y ${ALINAS_RPM_BASE_URL}/alinas-efc-${EFC_VERSION}.${ARCH}.rpm; \
     yum clean all; \
@@ -129,6 +129,9 @@ RUN --mount=type=bind,from=rpm-builder,source=/root/rpmbuild/RPMS/noarch,target=
 # alinas-utils generates some dynamic configuration files (such as TLS keys, etc.) under /etc/aliyun/{alinas,cpfs}.
 # So we will mount a hostPath to prevent the loss of these files when the container restarts.
 # On the first launch, /etc/aliyun-defaults will be used to initialize the configurations under /etc/aliyun/{alinas,cpfs}.
+# The NAS RSA private key is generated at pod startup by csi-mount-proxy-server
+# via the alinas-keygen script (shipped by aliyun-alinas-utils), so it is not
+# pre-generated here.
 RUN cp -r /etc/aliyun /etc/aliyun-defaults
 
 COPY --link --from=builder /out/csi-mount-proxy* /usr/local/bin/
@@ -146,7 +149,7 @@ ARG OSSFS_VERSION=v1.91.12.ack.2
 ARG OSSFS2_VERSION=v2.0.9.ack.3
 ARG OSSFS_RPM_URL
 ARG OSSFS2_RPM_URL
-ARG ALINAS_UTILS_VERSION=2.4-0.20260813143608.fcc94d.generic
+ARG ALINAS_UTILS_VERSION=2.4-0.20260825141903.98d7f7.generic
 ARG EFC_VERSION=2.4-20260817135527.cb17f4.5b35e56.release
 ARG ALINAS_RPM_BASE_URL=https://aliyun-alinas-eac.oss-cn-beijing.aliyuncs.com/efc-release/2.4
 
@@ -158,7 +161,7 @@ RUN --mount=type=bind,from=rpm-builder,source=/root/rpmbuild/RPMS/noarch,target=
         linux/arm64) OSSFS_ARCH="aarch_64"; ALINAS_ARCH="aarch64" ;; \
         *) echo "unknown platform"; exit 1 ;; \
     esac; \
-    yum install -y /tmp/rpms/python3-provider-*.rpm fuse-devel util-linux mailcap procps tini; \
+    yum install -y /tmp/rpms/python3-provider-*.rpm fuse-devel util-linux mailcap procps tini openssl; \
     yum install -y ${OSSFS_RPM_URL:-https://ack-csiplugin.oss-cn-hangzhou.aliyuncs.com/ossfs/ossfs_${OSSFS_VERSION}_centos8.0_${OSSFS_ARCH}.rpm}; \
     yum install -y ${OSSFS2_RPM_URL:-https://ack-csiplugin.oss-cn-hangzhou.aliyuncs.com/ossfs2/ossfs2_${OSSFS2_VERSION}_centos8.0_${OSSFS_ARCH}.rpm}; \
     yum install -y ${ALINAS_RPM_BASE_URL}/aliyun-alinas-utils-${ALINAS_UTILS_VERSION}.${ALINAS_ARCH}.rpm; \

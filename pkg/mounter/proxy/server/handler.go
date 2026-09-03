@@ -146,6 +146,19 @@ func CleanupNASMountsOnExit() bool {
 	return cleanupNASMountsOnExit.Load()
 }
 
+var initNASRSAPEM atomic.Bool
+
+// SetInitNASRSAPEM controls whether the alinas driver should generate the NAS
+// RSA private key (privateKey.pem) during initialization.
+func SetInitNASRSAPEM(v bool) {
+	initNASRSAPEM.Store(v)
+}
+
+// InitNASRSAPEM reports whether NAS RSA private key initialization is enabled.
+func InitNASRSAPEM() bool {
+	return initNASRSAPEM.Load()
+}
+
 func Init(driverNames []string) {
 	for _, name := range sets.New(driverNames...).UnsortedList() {
 		if driver, ok := nameToDriver[name]; ok {

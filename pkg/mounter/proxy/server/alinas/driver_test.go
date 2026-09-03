@@ -258,6 +258,70 @@ func TestTerminate_CleanupEnabledButNoResetFlag(t *testing.T) {
 	assert.True(t, loaded, "targets should remain when reset flag is absent")
 }
 
+// stubAlinasKeygen installs a fake `alinas-keygen` on PATH that mimics the real
+// script: it generates a key at $KEY_FILE (defaulting to keyPath) only if it
+// does not already exist, so tests can exercise initRSAPrivateKey without the
+// real aliyun-alinas-utils package or openssl RSA-3072 generation cost.
+func stubAlinasKeygen(t *testing.T, keyPath string) {
+	t.Helper()
+	binDir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"KEY_FILE=\"" + keyPath + "\"\n" +
+		"if [ -f \"$KEY_FILE\" ]; then echo \"Private key already exists at $KEY_FILE, skipping.\"; exit 0; fi\n" +
+		"mkdir -p \"$(dirname \"$KEY_FILE\")\"\n" +
+		"echo stub-key > \"$KEY_FILE\"\n" +
+		"chmod 400 \"$KEY_FILE\"\n" +
+		"echo \"Private key generated at $KEY_FILE\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, alinasKeygenCommand), []byte(script), 0755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestInitRSAPrivateKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "alinas", "privateKey.pem")
+	stubAlinasKeygen(t, keyPath)
+
+	driver := &Driver{ConfigDir: tmpDir}
+
+	// First run generates the key.
+	require.NoError(t, driver.initRSAPrivateKey())
+	fi, err := os.Stat(keyPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0400), fi.Mode().Perm())
+
+	data, err := os.ReadFile(keyPath)
+	require.NoError(t, err)
+	assert.NotEmpty(t, data)
+
+	// Second run is idempotent: the script skips regeneration when the key
+	// already exists, so the key content is preserved.
+	require.NoError(t, driver.initRSAPrivateKey())
+	newData, err := os.ReadFile(keyPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(data), string(newData), "existing key should be preserved (idempotent)")
+}
+
+func TestInitRSAPrivateKey_CommandMissing(t *testing.T) {
+	// With alinas-keygen absent from PATH, initRSAPrivateKey must return an error
+	// rather than silently succeeding.
+	t.Setenv("PATH", t.TempDir())
+	driver := &Driver{ConfigDir: t.TempDir()}
+	assert.Error(t, driver.initRSAPrivateKey())
+}
+
+func TestConfigDir(t *testing.T) {
+	assert.Equal(t, configDir, (&Driver{}).configDir())
+	assert.Equal(t, "/custom/aliyun", (&Driver{ConfigDir: "/custom/aliyun"}).configDir())
+}
+
+func TestInitNASRSAPEMFlag(t *testing.T) {
+	defer server.SetInitNASRSAPEM(false)
+	assert.False(t, server.InitNASRSAPEM())
+	server.SetInitNASRSAPEM(true)
+	assert.True(t, server.InitNASRSAPEM())
+}
+
 func TestResetFlagPath_Default(t *testing.T) {
 	driver := &Driver{}
 	assert.Equal(t, defaultResetFlagPath, driver.resetFlagPath())

@@ -2,6 +2,7 @@ package alinas
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -46,6 +47,8 @@ type Driver struct {
 	mounter.Mounter
 	targets       sync.Map
 	ResetFlagPath string
+	// ConfigDir overrides the base config directory (/etc/aliyun). Used in tests.
+	ConfigDir string
 }
 
 func (h *Driver) Name() string {
@@ -93,8 +96,51 @@ func (h *Driver) Mount(ctx context.Context, req *proxy.MountRequest) error {
 
 func (h *Driver) Init() {
 	setupDefaultConfigs()
+	if server.InitNASRSAPEM() {
+		if err := h.initRSAPrivateKey(); err != nil {
+			klog.ErrorS(err, "Failed to init NAS RSA private key")
+			panic(err)
+		}
+	}
 	go runCommandForever("aliyun-alinas-mount-watchdog")
 	go runCommandForever("aliyun-cpfs-mount-watchdog")
+}
+
+// alinasKeygenCommand is the helper script shipped by aliyun-alinas-utils that
+// generates the NAS RSA private key under <configDir>/alinas. It is idempotent:
+// it skips generation when the key already exists.
+const alinasKeygenCommand = "alinas-keygen"
+
+func (h *Driver) configDir() string {
+	if h.ConfigDir != "" {
+		return h.ConfigDir
+	}
+	return configDir
+}
+
+// initRSAPrivateKey generates the NAS RSA private key by invoking the
+// alinas-keygen helper script shipped by aliyun-alinas-utils at pod startup.
+//
+// alinas-keygen effectively runs:
+//
+//	mkdir -p /etc/aliyun/alinas &&
+//	  openssl genpkey -algorithm RSA -out /etc/aliyun/alinas/privateKey.pem -pkeyopt rsa_keygen_bits:3072 &&
+//	  chmod 400 /etc/aliyun/alinas/privateKey.pem
+//
+// It is idempotent: if the key already exists it prints a message and exits 0
+// without overwriting it. The key it emits is an unencrypted PKCS#8 PEM block
+// ("-----BEGIN PRIVATE KEY-----").
+func (h *Driver) initRSAPrivateKey() error {
+	klog.InfoS("Generating NAS RSA private key via alinas-keygen", "command", alinasKeygenCommand)
+
+	cmd := exec.Command(alinasKeygenCommand)
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("run %s: %w: %s", alinasKeygenCommand, err, strings.TrimSpace(string(out)))
+	}
+	klog.InfoS("alinas-keygen finished", "output", strings.TrimSpace(string(out)))
+	return nil
 }
 
 // defaultResetFlagPath is the path to the reset flag file written by envd.
