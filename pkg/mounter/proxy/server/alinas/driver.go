@@ -96,7 +96,7 @@ func (h *Driver) Mount(ctx context.Context, req *proxy.MountRequest) error {
 
 func (h *Driver) Init() {
 	setupDefaultConfigs()
-	if server.InitNASRSAPEM() {
+	if server.InitNASRSAPEM {
 		if err := h.initRSAPrivateKey(); err != nil {
 			klog.Fatalf("Failed to init NAS RSA private key: %v", err)
 		}
@@ -152,7 +152,6 @@ func (h *Driver) initRSAPrivateKey() error {
 	klog.InfoS("Generating NAS RSA private key via alinas-keygen", "command", alinasKeygenCommand, "path", keyPath)
 
 	cmd := exec.Command(alinasKeygenCommand)
-	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("run %s: %w: %s", alinasKeygenCommand, err, strings.TrimSpace(string(out)))

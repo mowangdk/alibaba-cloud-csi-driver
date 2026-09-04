@@ -333,10 +333,10 @@ func TestRSAPrivateKeyPath(t *testing.T) {
 }
 
 func TestInitNASRSAPEMFlag(t *testing.T) {
-	defer server.SetInitNASRSAPEM(false)
-	assert.False(t, server.InitNASRSAPEM())
-	server.SetInitNASRSAPEM(true)
-	assert.True(t, server.InitNASRSAPEM())
+	defer func() { server.InitNASRSAPEM = false }()
+	assert.False(t, server.InitNASRSAPEM)
+	server.InitNASRSAPEM = true
+	assert.True(t, server.InitNASRSAPEM)
 }
 
 func TestResetFlagPath_Default(t *testing.T) {
