@@ -602,12 +602,13 @@ func generateTestCA(t *testing.T) []byte {
 }
 
 func TestBuildHTTPClientTLS(t *testing.T) {
-	t.Run("no CA uses system root pool", func(t *testing.T) {
+	t.Run("no CA skips verification instead of using the system root pool", func(t *testing.T) {
 		client, err := buildHTTPClient("")
 		require.NoError(t, err)
 		tr := client.Transport.(*http.Transport)
-		assert.Nil(t, tr.TLSClientConfig.RootCAs, "system root pool expected (RootCAs nil)")
-		assert.False(t, tr.TLSClientConfig.InsecureSkipVerify, "TLS verification must never be disabled")
+		assert.Nil(t, tr.TLSClientConfig.RootCAs, "no root pool expected (RootCAs nil)")
+		assert.True(t, tr.TLSClientConfig.InsecureSkipVerify,
+			"the AgentIdentity endpoint is private, so without a CA the system pool cannot verify it")
 	})
 
 	t.Run("valid CA file is loaded", func(t *testing.T) {

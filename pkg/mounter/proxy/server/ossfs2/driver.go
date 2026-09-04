@@ -89,9 +89,13 @@ func (h *Driver) ApplyOptionDefaults(options []string) []string {
 	var appends []string
 
 	// agent_identity_ca_file: only appended if configured and the file is readable.
+	// An unreadable path is left out so ossfs falls back to its own default of an
+	// empty value, which skips verification for the AgentIdentity endpoint alone.
 	if caPath := agentidentity.GetCAFilePath(); caPath != "" {
 		if unix.Access(caPath, unix.R_OK) == nil {
 			appends = append(appends, fmt.Sprintf("agent_identity_ca_file=%s", caPath))
+		} else {
+			klog.Warningf("agent identity CA file %q is not readable, ossfs2 will skip TLS verification for the AgentIdentity endpoint", caPath)
 		}
 	}
 
