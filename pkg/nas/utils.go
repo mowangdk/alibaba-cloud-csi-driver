@@ -199,17 +199,29 @@ func doMount(m mounter.Mounter, opt *Options, targetPath, volumeId, podUid strin
 			return err
 		}
 	}
+
+	// The temporary mount already exposes the subpath just created, so bind it to
+	// the target instead of paying for a second remote mount. The bind keeps the
+	// filesystem referenced, so unmounting the temporary mountpoint right after
+	// leaves the target mount intact.
+	bindOptions := []string{"bind"}
+	if slices.Contains(combinedOptions, "ro") {
+		// The temporary mount dropped "ro" to create the directory, so restore it on
+		// the bind (mount-utils turns this into bind + remount,bind,ro).
+		bindOptions = append(bindOptions, "ro")
+	}
+	// No secrets: a bind never talks to the server, and passing them would make
+	// the mount interceptors write credential files for nothing.
+	bindErr := m.ExtendedMount(context.Background(), &mounter.MountOperation{
+		Source:   subDir,
+		Target:   targetPath,
+		Options:  bindOptions,
+		VolumeID: volumeId,
+	})
 	if err := cleanupMountpoint(m, tmpPath); err != nil {
 		klog.Errorf("failed to cleanup tmp mountpoint %s: %v", tmpPath, err)
 	}
-	return m.ExtendedMount(context.Background(), &mounter.MountOperation{
-		Source:   source,
-		Target:   targetPath,
-		FsType:   mountFstype,
-		Options:  combinedOptions,
-		Secrets:  secrets,
-		VolumeID: volumeId,
-	})
+	return bindErr
 }
 
 func getMountRootAndRelPath(mountFsType string, opt *Options) (rootSource, relPath string) {

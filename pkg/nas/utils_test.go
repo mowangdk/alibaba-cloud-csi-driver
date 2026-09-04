@@ -20,9 +20,12 @@ package nas
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter"
+	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	mountutils "k8s.io/mount-utils"
 )
@@ -235,6 +238,87 @@ type recordingMounter struct {
 func (m *recordingMounter) ExtendedMount(_ context.Context, op *mounter.MountOperation) error {
 	m.lastOp = op
 	return nil
+}
+
+// pathNotFoundMounter records every mount operation and fails the first one with
+// the given error, which lets tests drive the subpath auto-creation path.
+type pathNotFoundMounter struct {
+	mountutils.FakeMounter
+	firstErr error
+	ops      []*mounter.MountOperation
+}
+
+func (m *pathNotFoundMounter) ExtendedMount(_ context.Context, op *mounter.MountOperation) error {
+	m.ops = append(m.ops, op)
+	if len(m.ops) == 1 {
+		return m.firstErr
+	}
+	return nil
+}
+
+// The subpath is created through a temporary mount of the filesystem root, which
+// already exposes it: the target must then be bind mounted from that temporary
+// mount instead of paying for a second remote mount, and "ro" (dropped to be
+// able to create the directory) must be restored on the bind.
+func TestDoMount_SubpathCreationBindsCreatedDirectory(t *testing.T) {
+	kubeletRootDir := utils.KubeletRootDir
+	utils.KubeletRootDir = t.TempDir()
+	defer func() { utils.KubeletRootDir = kubeletRootDir }()
+
+	m := &pathNotFoundMounter{
+		firstErr: errors.New("mount.nfs: mounting test-server:/sub/dir failed, reason given by server: No such file or directory"),
+	}
+	opt := &Options{
+		FSType:        "standard",
+		Server:        "test-server",
+		Path:          "/sub/dir",
+		Vers:          "3",
+		Options:       []string{"nolock", "ro"},
+		MountProtocol: MountProtocolNFS,
+	}
+	assert.NoError(t, doMount(m, opt, "/mnt/target", "vol-123", "pod-uid", false))
+
+	assert.Len(t, m.ops, 3)
+	// the failed mount of the volume itself
+	assert.Equal(t, "test-server:/sub/dir", m.ops[0].Source)
+	// the temporary read-write mount of the filesystem root
+	tmpPath := m.ops[1].Target
+	assert.Equal(t, "test-server:/", m.ops[1].Source)
+	assert.Contains(t, tmpPath, filepath.Join(utils.KubeletRootDir, "csi-plugins"))
+	assert.NotContains(t, m.ops[1].Options, "ro")
+	// the bind mount of the created subpath, replacing the second remote mount
+	assert.Equal(t, filepath.Join(tmpPath, "sub/dir"), m.ops[2].Source)
+	assert.Equal(t, "/mnt/target", m.ops[2].Target)
+	assert.Empty(t, m.ops[2].FsType)
+	assert.Equal(t, []string{"bind", "ro"}, m.ops[2].Options)
+	assert.Empty(t, m.ops[2].Secrets)
+}
+
+// alinas mounts (EFC/CPFS) reach the created subpath the same way: the target is
+// bound from the temporary mount of the filesystem root.
+func TestDoMount_SubpathCreationBindsCreatedDirectoryForAlinas(t *testing.T) {
+	kubeletRootDir := utils.KubeletRootDir
+	utils.KubeletRootDir = t.TempDir()
+	defer func() { utils.KubeletRootDir = kubeletRootDir }()
+
+	m := &pathNotFoundMounter{firstErr: errors.New("Failed to bind mount")}
+	opt := &Options{
+		FSType:        "cpfs",
+		Server:        "cpfs-0123456789-vpc.cn-hangzhou.cpfs.aliyuncs.com",
+		Path:          "/share/sub",
+		Vers:          "3",
+		Options:       []string{"nolock"},
+		MountProtocol: MountProtocolEFC,
+	}
+	assert.NoError(t, doMount(m, opt, "/mnt/target", "vol-123", "pod-uid", true))
+
+	assert.Len(t, m.ops, 3)
+	// the temporary mount starts at /share for cpfs filesystems
+	tmpPath := m.ops[1].Target
+	assert.Equal(t, opt.Server+":/share", m.ops[1].Source)
+	assert.Equal(t, filepath.Join(tmpPath, "sub"), m.ops[2].Source)
+	assert.Equal(t, "/mnt/target", m.ops[2].Target)
+	assert.Equal(t, []string{"bind"}, m.ops[2].Options)
 }
 
 func TestDoMount_AccesspointWithAkSkFromMountOptions(t *testing.T) {
