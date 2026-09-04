@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"k8s.io/klog/v2"
 )
 
 const (
@@ -79,10 +81,16 @@ type credentialResponse struct {
 }
 
 // buildHTTPClient builds the HTTP client used to exchange the jwtauth token
-// for STS credentials. This is a security-sensitive channel (it carries
-// AK/SK), so TLS verification is never disabled: when a CA file is configured
-// it must be readable and parsable, otherwise it fails; when no CA file is
-// configured the system root pool is used (tls.Config.RootCAs == nil).
+// for STS credentials. A configured CA file must be readable and parsable,
+// otherwise it fails.
+//
+// Without a CA file, verification is skipped rather than deferred to the system
+// root pool. The AgentIdentity endpoint is an in-cluster service holding a
+// private certificate that no public root signs, so the system pool can only
+// accept it while something injects that private CA into the process-wide trust
+// store — and such an injection also hides every public root from the same
+// process, breaking unrelated OSS connections. Skipping verification keeps the
+// two concerns apart, matching how ossfs treats an empty agent_identity_ca_file.
 func buildHTTPClient(caFile string) (*http.Client, error) {
 	tlsConfig := &tls.Config{}
 	if caFile != "" {
@@ -95,6 +103,9 @@ func buildHTTPClient(caFile string) (*http.Client, error) {
 			return nil, fmt.Errorf("parse CA file %s: no valid certificate found", caFile)
 		}
 		tlsConfig.RootCAs = pool
+	} else {
+		klog.Warningf("no agent identity CA file configured, skipping TLS verification for the AgentIdentity endpoint")
+		tlsConfig.InsecureSkipVerify = true
 	}
 	return &http.Client{
 		Timeout:   httpTimeout,

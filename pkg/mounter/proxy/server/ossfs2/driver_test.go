@@ -2,6 +2,7 @@ package ossfs2
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
@@ -15,6 +16,64 @@ import (
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter"
 	"github.com/kubernetes-sigs/alibaba-cloud-csi-driver/pkg/mounter/proxy/server"
 )
+
+func TestApplyOptionDefaults(t *testing.T) {
+	t.Run("no CA file configured, options unchanged", func(t *testing.T) {
+		t.Setenv("AGENT_IDENTITY_CERT_FILE", "")
+		d := &Driver{}
+		options := []string{"oss_endpoint=https://oss-cn-hangzhou.aliyuncs.com", "allow_other"}
+		result := d.ApplyOptionDefaults(options)
+		assert.Equal(t, []string{"oss_endpoint=https://oss-cn-hangzhou.aliyuncs.com", "allow_other"}, result)
+	})
+
+	t.Run("nil options, no CA file", func(t *testing.T) {
+		t.Setenv("AGENT_IDENTITY_CERT_FILE", "")
+		d := &Driver{}
+		assert.Nil(t, d.ApplyOptionDefaults(nil))
+	})
+
+	t.Run("user already specified agent_identity_ca_file", func(t *testing.T) {
+		dir := t.TempDir()
+		caFile := filepath.Join(dir, "ca.crt")
+		require.NoError(t, os.WriteFile(caFile, []byte("fake-ca"), 0644))
+
+		t.Setenv("AGENT_IDENTITY_CERT_FILE", caFile)
+		d := &Driver{}
+		options := []string{"agent_identity_ca_file=/custom/path/ca.crt", "oss_region=cn-hangzhou"}
+		result := d.ApplyOptionDefaults(options)
+		assert.Equal(t, []string{"agent_identity_ca_file=/custom/path/ca.crt", "oss_region=cn-hangzhou"}, result)
+	})
+
+	t.Run("CA file present and readable, appends option", func(t *testing.T) {
+		dir := t.TempDir()
+		caFile := filepath.Join(dir, "ca.crt")
+		require.NoError(t, os.WriteFile(caFile, []byte("fake-ca"), 0644))
+
+		t.Setenv("AGENT_IDENTITY_CERT_FILE", caFile)
+		d := &Driver{}
+		options := []string{"oss_region=cn-hangzhou"}
+		result := d.ApplyOptionDefaults(options)
+		assert.Equal(t, []string{"oss_region=cn-hangzhou", "agent_identity_ca_file=" + caFile}, result)
+	})
+
+	// Omitting the option leaves ossfs2 on its own empty default, which skips
+	// verification for the AgentIdentity endpoint rather than pointing it at a
+	// file it cannot open.
+	t.Run("CA file not readable, options unchanged", func(t *testing.T) {
+		if os.Getuid() == 0 {
+			t.Skip("root bypasses file permission checks")
+		}
+		dir := t.TempDir()
+		caFile := filepath.Join(dir, "ca.crt")
+		require.NoError(t, os.WriteFile(caFile, []byte("fake-ca"), 0000))
+
+		t.Setenv("AGENT_IDENTITY_CERT_FILE", caFile)
+		d := &Driver{}
+		options := []string{"oss_region=cn-hangzhou"}
+		result := d.ApplyOptionDefaults(options)
+		assert.Equal(t, []string{"oss_region=cn-hangzhou"}, result)
+	})
+}
 
 type fakeMountChecker struct {
 	mount.Interface
