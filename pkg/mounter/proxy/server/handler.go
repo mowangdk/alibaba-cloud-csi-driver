@@ -146,17 +146,19 @@ func CleanupNASMountsOnExit() bool {
 	return cleanupNASMountsOnExit.Load()
 }
 
-var initNASRSAPEM atomic.Bool
+// initNASRSAPEM is set once in main before Init is called and read only during
+// (single-threaded) driver initialization, so it needs no synchronization.
+var initNASRSAPEM bool
 
 // SetInitNASRSAPEM controls whether the alinas driver should generate the NAS
 // RSA private key (privateKey.pem) during initialization.
 func SetInitNASRSAPEM(v bool) {
-	initNASRSAPEM.Store(v)
+	initNASRSAPEM = v
 }
 
 // InitNASRSAPEM reports whether NAS RSA private key initialization is enabled.
 func InitNASRSAPEM() bool {
-	return initNASRSAPEM.Load()
+	return initNASRSAPEM
 }
 
 func Init(driverNames []string) {

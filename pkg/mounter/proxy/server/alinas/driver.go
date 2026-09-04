@@ -98,8 +98,7 @@ func (h *Driver) Init() {
 	setupDefaultConfigs()
 	if server.InitNASRSAPEM() {
 		if err := h.initRSAPrivateKey(); err != nil {
-			klog.ErrorS(err, "Failed to init NAS RSA private key")
-			panic(err)
+			klog.Fatalf("Failed to init NAS RSA private key: %v", err)
 		}
 	}
 	go runCommandForever("aliyun-alinas-mount-watchdog")
@@ -107,15 +106,23 @@ func (h *Driver) Init() {
 }
 
 // alinasKeygenCommand is the helper script shipped by aliyun-alinas-utils that
-// generates the NAS RSA private key under <configDir>/alinas. It is idempotent:
-// it skips generation when the key already exists.
+// generates the NAS RSA private key under <configDir>/alinas.
 const alinasKeygenCommand = "alinas-keygen"
+
+// rsaPrivateKeyFile is the NAS RSA private key filename generated under
+// <configDir>/alinas by alinas-keygen.
+const rsaPrivateKeyFile = "privateKey.pem"
 
 func (h *Driver) configDir() string {
 	if h.ConfigDir != "" {
 		return h.ConfigDir
 	}
 	return configDir
+}
+
+// rsaPrivateKeyPath is the full path of the NAS RSA private key.
+func (h *Driver) rsaPrivateKeyPath() string {
+	return filepath.Join(h.configDir(), "alinas", rsaPrivateKeyFile)
 }
 
 // initRSAPrivateKey generates the NAS RSA private key by invoking the
@@ -127,11 +134,22 @@ func (h *Driver) configDir() string {
 //	  openssl genpkey -algorithm RSA -out /etc/aliyun/alinas/privateKey.pem -pkeyopt rsa_keygen_bits:3072 &&
 //	  chmod 400 /etc/aliyun/alinas/privateKey.pem
 //
-// It is idempotent: if the key already exists it prints a message and exits 0
-// without overwriting it. The key it emits is an unencrypted PKCS#8 PEM block
+// The key it emits is an unencrypted PKCS#8 PEM block
 // ("-----BEGIN PRIVATE KEY-----").
+//
+// This function is idempotent regardless of the script's behavior: it stats the
+// key first and skips generation when it already exists, so an existing key
+// (persisted via the /etc/aliyun hostPath) is never rotated on restart.
 func (h *Driver) initRSAPrivateKey() error {
-	klog.InfoS("Generating NAS RSA private key via alinas-keygen", "command", alinasKeygenCommand)
+	keyPath := h.rsaPrivateKeyPath()
+	if _, err := os.Stat(keyPath); err == nil {
+		klog.InfoS("NAS RSA private key already exists, skipping generation", "path", keyPath)
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", keyPath, err)
+	}
+
+	klog.InfoS("Generating NAS RSA private key via alinas-keygen", "command", alinasKeygenCommand, "path", keyPath)
 
 	cmd := exec.Command(alinasKeygenCommand)
 	cmd.Env = os.Environ()

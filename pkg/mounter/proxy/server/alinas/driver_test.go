@@ -258,33 +258,35 @@ func TestTerminate_CleanupEnabledButNoResetFlag(t *testing.T) {
 	assert.True(t, loaded, "targets should remain when reset flag is absent")
 }
 
-// stubAlinasKeygen installs a fake `alinas-keygen` on PATH that mimics the real
-// script: it generates a key at $KEY_FILE (defaulting to keyPath) only if it
-// does not already exist, so tests can exercise initRSAPrivateKey without the
-// real aliyun-alinas-utils package or openssl RSA-3072 generation cost.
+// stubAlinasKeygen installs a fake `alinas-keygen` on PATH that writes a key to
+// keyPath, so tests can exercise initRSAPrivateKey without the real
+// aliyun-alinas-utils package or the openssl RSA-3072 generation cost.
 func stubAlinasKeygen(t *testing.T, keyPath string) {
 	t.Helper()
+	installStubKeygen(t, "#!/bin/sh\n"+
+		"set -eu\n"+
+		"KEY_FILE=\""+keyPath+"\"\n"+
+		"mkdir -p \"$(dirname \"$KEY_FILE\")\"\n"+
+		"echo stub-key > \"$KEY_FILE\"\n"+
+		"chmod 400 \"$KEY_FILE\"\n"+
+		"echo \"Private key generated at $KEY_FILE\"\n")
+}
+
+// installStubKeygen writes the given script as `alinas-keygen` and prepends it
+// to PATH for the duration of the test.
+func installStubKeygen(t *testing.T, script string) {
+	t.Helper()
 	binDir := t.TempDir()
-	script := "#!/bin/sh\n" +
-		"set -eu\n" +
-		"KEY_FILE=\"" + keyPath + "\"\n" +
-		"if [ -f \"$KEY_FILE\" ]; then echo \"Private key already exists at $KEY_FILE, skipping.\"; exit 0; fi\n" +
-		"mkdir -p \"$(dirname \"$KEY_FILE\")\"\n" +
-		"echo stub-key > \"$KEY_FILE\"\n" +
-		"chmod 400 \"$KEY_FILE\"\n" +
-		"echo \"Private key generated at $KEY_FILE\"\n"
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, alinasKeygenCommand), []byte(script), 0755))
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func TestInitRSAPrivateKey(t *testing.T) {
-	tmpDir := t.TempDir()
-	keyPath := filepath.Join(tmpDir, "alinas", "privateKey.pem")
+	driver := &Driver{ConfigDir: t.TempDir()}
+	keyPath := driver.rsaPrivateKeyPath()
 	stubAlinasKeygen(t, keyPath)
 
-	driver := &Driver{ConfigDir: tmpDir}
-
-	// First run generates the key.
+	// First run generates the key at the ConfigDir-derived path.
 	require.NoError(t, driver.initRSAPrivateKey())
 	fi, err := os.Stat(keyPath)
 	require.NoError(t, err)
@@ -293,13 +295,23 @@ func TestInitRSAPrivateKey(t *testing.T) {
 	data, err := os.ReadFile(keyPath)
 	require.NoError(t, err)
 	assert.NotEmpty(t, data)
+}
 
-	// Second run is idempotent: the script skips regeneration when the key
-	// already exists, so the key content is preserved.
+func TestInitRSAPrivateKey_Idempotent(t *testing.T) {
+	driver := &Driver{ConfigDir: t.TempDir()}
+	keyPath := driver.rsaPrivateKeyPath()
+
+	// Pre-create the key, then install a keygen stub that fails if invoked.
+	require.NoError(t, os.MkdirAll(filepath.Dir(keyPath), 0755))
+	require.NoError(t, os.WriteFile(keyPath, []byte("existing-key"), 0400))
+	installStubKeygen(t, "#!/bin/sh\necho 'alinas-keygen must not run when key exists' >&2\nexit 1\n")
+
+	// initRSAPrivateKey must skip the script (Go-side stat guard) and preserve
+	// the existing key, so it is never rotated on restart.
 	require.NoError(t, driver.initRSAPrivateKey())
-	newData, err := os.ReadFile(keyPath)
+	data, err := os.ReadFile(keyPath)
 	require.NoError(t, err)
-	assert.Equal(t, string(data), string(newData), "existing key should be preserved (idempotent)")
+	assert.Equal(t, "existing-key", string(data), "existing key should be preserved (idempotent)")
 }
 
 func TestInitRSAPrivateKey_CommandMissing(t *testing.T) {
@@ -313,6 +325,11 @@ func TestInitRSAPrivateKey_CommandMissing(t *testing.T) {
 func TestConfigDir(t *testing.T) {
 	assert.Equal(t, configDir, (&Driver{}).configDir())
 	assert.Equal(t, "/custom/aliyun", (&Driver{ConfigDir: "/custom/aliyun"}).configDir())
+}
+
+func TestRSAPrivateKeyPath(t *testing.T) {
+	assert.Equal(t, filepath.Join(configDir, "alinas", rsaPrivateKeyFile), (&Driver{}).rsaPrivateKeyPath())
+	assert.Equal(t, "/custom/aliyun/alinas/"+rsaPrivateKeyFile, (&Driver{ConfigDir: "/custom/aliyun"}).rsaPrivateKeyPath())
 }
 
 func TestInitNASRSAPEMFlag(t *testing.T) {
