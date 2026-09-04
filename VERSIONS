@@ -28,7 +28,7 @@ OSSFS2_IMAGE_TAG=v2.0.9.ack.3-a1f29fc
 ALINAS_RPM_BASE_URL=https://aliyun-alinas-eac.oss-cn-beijing.aliyuncs.com/efc-release/2.4
 
 # ALINAS Utils version (used in Dockerfile for yum install)
-ALINAS_UTILS_VERSION=2.4-0.20260813143608.fcc94d.generic
+ALINAS_UTILS_VERSION=2.4-0.20260902175145.d1c35c.generic
 
 # EFC version (used in Dockerfile for yum install)
 EFC_VERSION=2.4-20260817135527.cb17f4.5b35e56.release
