@@ -199,8 +199,28 @@ func doMount(m mounter.Mounter, opt *Options, targetPath, volumeId, podUid strin
 			return err
 		}
 	}
+	// For plain NFS, bind mount the created subpath onto the target instead of
+	// doing a second NFS mount below: it saves an NFS round-trip and the target
+	// stays usable after the temporary root is unmounted (shared superblock).
+	// Only plain NFS is safe here: alinas/cpfs targets are broker-owned and a
+	// local bind would break broker unmount ownership.
+	bindDone := false
+	if mountFstype == MountProtocolNFS {
+		if err := m.Mount(subDir, targetPath, "", []string{"bind"}); err != nil {
+			return err
+		}
+		if slices.Contains(combinedOptions, "ro") {
+			if err := m.Mount(subDir, targetPath, "", []string{"bind", "remount", "ro"}); err != nil {
+				return err
+			}
+		}
+		bindDone = true
+	}
 	if err := cleanupMountpoint(m, tmpPath); err != nil {
 		klog.Errorf("failed to cleanup tmp mountpoint %s: %v", tmpPath, err)
+	}
+	if bindDone {
+		return nil
 	}
 	return m.ExtendedMount(context.Background(), &mounter.MountOperation{
 		Source:   source,
