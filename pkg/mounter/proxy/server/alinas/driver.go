@@ -2,6 +2,7 @@ package alinas
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -46,6 +47,8 @@ type Driver struct {
 	mounter.Mounter
 	targets       sync.Map
 	ResetFlagPath string
+	// ConfigDir overrides the base config directory (/etc/aliyun). Used in tests.
+	ConfigDir string
 }
 
 func (h *Driver) Name() string {
@@ -93,8 +96,68 @@ func (h *Driver) Mount(ctx context.Context, req *proxy.MountRequest) error {
 
 func (h *Driver) Init() {
 	setupDefaultConfigs()
+	if server.InitNASRSAPEM {
+		if err := h.initRSAPrivateKey(); err != nil {
+			klog.Fatalf("Failed to init NAS RSA private key: %v", err)
+		}
+	}
 	go runCommandForever("aliyun-alinas-mount-watchdog")
 	go runCommandForever("aliyun-cpfs-mount-watchdog")
+}
+
+// alinasKeygenCommand is the helper script shipped by aliyun-alinas-utils that
+// generates the NAS RSA private key under <configDir>/alinas.
+const alinasKeygenCommand = "alinas-keygen"
+
+// rsaPrivateKeyFile is the NAS RSA private key filename generated under
+// <configDir>/alinas by alinas-keygen.
+const rsaPrivateKeyFile = "privateKey.pem"
+
+func (h *Driver) configDir() string {
+	if h.ConfigDir != "" {
+		return h.ConfigDir
+	}
+	return configDir
+}
+
+// rsaPrivateKeyPath is the full path of the NAS RSA private key.
+func (h *Driver) rsaPrivateKeyPath() string {
+	return filepath.Join(h.configDir(), "alinas", rsaPrivateKeyFile)
+}
+
+// initRSAPrivateKey generates the NAS RSA private key by invoking the
+// alinas-keygen helper script shipped by aliyun-alinas-utils at pod startup.
+//
+// alinas-keygen effectively runs:
+//
+//	mkdir -p /etc/aliyun/alinas &&
+//	  openssl genpkey -algorithm RSA -out /etc/aliyun/alinas/privateKey.pem -pkeyopt rsa_keygen_bits:3072 &&
+//	  chmod 400 /etc/aliyun/alinas/privateKey.pem
+//
+// The key it emits is an unencrypted PKCS#8 PEM block
+// ("-----BEGIN PRIVATE KEY-----").
+//
+// This function is idempotent regardless of the script's behavior: it stats the
+// key first and skips generation when it already exists, so an existing key
+// (persisted via the /etc/aliyun hostPath) is never rotated on restart.
+func (h *Driver) initRSAPrivateKey() error {
+	keyPath := h.rsaPrivateKeyPath()
+	if _, err := os.Stat(keyPath); err == nil {
+		klog.InfoS("NAS RSA private key already exists, skipping generation", "path", keyPath)
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", keyPath, err)
+	}
+
+	klog.InfoS("Generating NAS RSA private key via alinas-keygen", "command", alinasKeygenCommand, "path", keyPath)
+
+	cmd := exec.Command(alinasKeygenCommand)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("run %s: %w: %s", alinasKeygenCommand, err, strings.TrimSpace(string(out)))
+	}
+	klog.InfoS("alinas-keygen finished", "output", strings.TrimSpace(string(out)))
+	return nil
 }
 
 // defaultResetFlagPath is the path to the reset flag file written by envd.

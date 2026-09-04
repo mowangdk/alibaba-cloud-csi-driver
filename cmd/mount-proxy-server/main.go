@@ -39,6 +39,7 @@ func main() {
 		"how long a connection has to deliver a request and receive its answer; also caps a mount when shorter than what the client asks for")
 	flag.BoolVar(&enableNftables, "enable-nftables", false, "enable nftables rules to restrict mount proxy port access (default: false)")
 	flag.BoolVar(&cleanupNASMounts, "cleanup-nas-mounts-on-exit", false, "unmount all NAS mount points inside the pod on SIGTERM")
+	flag.BoolVar(&server.InitNASRSAPEM, "init-nas-rsa-pem", false, "generate the NAS RSA private key (/etc/aliyun/alinas/privateKey.pem) on startup")
 	utils.AddKlogFlags(flag.CommandLine)
 	utils.AddGoFlags(flag.CommandLine)
 	flag.Parse()
