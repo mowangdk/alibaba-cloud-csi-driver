@@ -1,4 +1,4 @@
-FROM centos:7.4.1708
+FROM centos:7.9.2009
 LABEL maintainers="Alibaba Cloud Authors"
 LABEL description="Alibaba Cloud CSI Plugin"
 
