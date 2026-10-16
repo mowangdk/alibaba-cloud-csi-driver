@@ -57,10 +57,11 @@ OSSFS2_FAILOVER_RPM_VERSION=$(echo "${OSSFS2_FAILOVER_IMAGE_TAG}" | sed 's/-[^-]
 
 # Extract ALINAS and EFC versions from VERSIONS file
 ALINAS_RPM_BASE_URL=$(grep "^ALINAS_RPM_BASE_URL=" "${VERSIONS_FILE}" | cut -d'=' -f2-)
+ALINAS_UTILS_RPM_BASE_URL=$(grep "^ALINAS_UTILS_RPM_BASE_URL=" "${VERSIONS_FILE}" | cut -d'=' -f2-)
 ALINAS_UTILS_VERSION=$(grep "^ALINAS_UTILS_VERSION=" "${VERSIONS_FILE}" | cut -d'=' -f2)
 EFC_VERSION=$(grep "^EFC_VERSION=" "${VERSIONS_FILE}" | cut -d'=' -f2)
 
-if [[ -z "${ALINAS_RPM_BASE_URL}" || -z "${ALINAS_UTILS_VERSION}" || -z "${EFC_VERSION}" ]]; then
+if [[ -z "${ALINAS_RPM_BASE_URL}" || -z "${ALINAS_UTILS_RPM_BASE_URL}" || -z "${ALINAS_UTILS_VERSION}" || -z "${EFC_VERSION}" ]]; then
     echo "Error: Failed to extract ALINAS/EFC versions from VERSIONS file" >&2
     exit 1
 fi
@@ -73,6 +74,7 @@ export OSSFS_RPM_VERSION
 export OSSFS2_RPM_VERSION
 export OSSFS2_FAILOVER_RPM_VERSION
 export ALINAS_RPM_BASE_URL
+export ALINAS_UTILS_RPM_BASE_URL
 export ALINAS_UTILS_VERSION
 export EFC_VERSION
 

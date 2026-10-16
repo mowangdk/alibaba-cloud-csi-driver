@@ -27,13 +27,16 @@ OSSFS2_FAILOVER_IMAGE_TAG=v2.0.8.ack.1.failover-1fd839a
 # ALINAS and EFC Version Configuration
 # This file is the single source of truth for alinas-utils and efc RPM package versions.
 # When updating versions, please update all references:
-# - build/mount-proxy/Dockerfile (ALINAS_UTILS_VERSION, EFC_VERSION, ALINAS_RPM_BASE_URL ARG defaults)
+# - build/mount-proxy/Dockerfile (ALINAS_UTILS_VERSION, EFC_VERSION, ALINAS_RPM_BASE_URL, ALINAS_UTILS_RPM_BASE_URL ARG defaults)
 
 # Base URL for ALINAS/EFC RPM packages (includes version path)
 ALINAS_RPM_BASE_URL=https://aliyun-alinas-eac-cn-beijing.oss-cn-beijing.aliyuncs.com/efc-release/2.6
 
+# Base URL for the ALINAS Utils RPM (test build, x86_64 only)
+ALINAS_UTILS_RPM_BASE_URL=http://airdrop.oss-cn-hangzhou-zmf.aliyuncs.com/files
+
 # ALINAS Utils version (used in Dockerfile for yum install)
-ALINAS_UTILS_VERSION=2.6-0.20261020204835.cb10e3.generic
+ALINAS_UTILS_VERSION=2.6-0.20261016171929.53891f.generic
 
 # EFC version (used in Dockerfile for yum install)
 EFC_VERSION=2.6-20261020162312.95306a.87a0a82.release

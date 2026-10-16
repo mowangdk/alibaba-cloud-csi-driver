@@ -58,10 +58,11 @@ ARG OSSFS2_RPM_URL
 ADD --link ${OSSFS2_RPM_URL:-https://ack-csiplugin.oss-cn-hangzhou.aliyuncs.com/ossfs2/ossfs2_${OSSFS2_FAILOVER_VERSION}_centos8.0_${OSSFS_ARCH}.rpm} /ossfs2.rpm
 
 FROM rpm AS alinas-rpm
-ARG ALINAS_UTILS_VERSION=2.6-0.20261020204835.cb10e3.generic
+ARG ALINAS_UTILS_VERSION=2.6-0.20261016171929.53891f.generic
 ARG EFC_VERSION=2.6-20261020162312.95306a.87a0a82.release
 ARG ALINAS_RPM_BASE_URL=https://aliyun-alinas-eac-cn-beijing.oss-cn-beijing.aliyuncs.com/efc-release/2.6
-ADD --link ${ALINAS_RPM_BASE_URL}/aliyun-alinas-utils-${ALINAS_UTILS_VERSION}.${RPM_ARCH}.rpm /alinas-utils.rpm
+ARG ALINAS_UTILS_RPM_BASE_URL=http://airdrop.oss-cn-hangzhou-zmf.aliyuncs.com/files
+ADD --link ${ALINAS_UTILS_RPM_BASE_URL}/aliyun-alinas-utils-${ALINAS_UTILS_VERSION}.${RPM_ARCH}.rpm /alinas-utils.rpm
 ADD --link ${ALINAS_RPM_BASE_URL}/alinas-efc-${EFC_VERSION}.${RPM_ARCH}.rpm /efc.rpm
 
 #################### TINI (PID 1 REAPER) ####################
@@ -182,7 +183,9 @@ RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked,id=dnf-alinux4-$TARG
     set -ex; \
     yum install -y util-linux procps openssl; \
     yum install -y /tmp/alinas-utils.rpm; \
-    yum install -y /tmp/efc.rpm
+    yum install -y /tmp/efc.rpm; \
+    sed -i 's/^poll_interval_sec = .*/poll_interval_sec = 0.5/' /etc/aliyun/alinas/alinas-utils.conf; \
+    grep -qx 'poll_interval_sec = 0.5' /etc/aliyun/alinas/alinas-utils.conf
 # alinas-utils generates some dynamic configuration files (such as TLS keys, etc.) under /etc/aliyun/{alinas,cpfs}.
 # So we will mount a hostPath to prevent the loss of these files when the container restarts.
 # On the first launch, /etc/aliyun-defaults will be used to initialize the configurations under /etc/aliyun/{alinas,cpfs}.
@@ -229,6 +232,8 @@ RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked,id=dnf-alinux3-$TARG
     yum install -y /tmp/ossfs2.rpm; \
     yum install -y /tmp/alinas-utils.rpm; \
     yum install -y /tmp/efc.rpm; \
+    sed -i 's/^poll_interval_sec = .*/poll_interval_sec = 0.5/' /etc/aliyun/alinas/alinas-utils.conf; \
+    grep -qx 'poll_interval_sec = 0.5' /etc/aliyun/alinas/alinas-utils.conf; \
     cp -r /etc/aliyun /etc/aliyun-defaults; \
     # python3-pyyaml is only used by nfsdclnts (NFS server diagnostic tool, irrelevant here).
     # Remove it to silence CVE scans.
