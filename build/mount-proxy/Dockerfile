@@ -181,7 +181,7 @@ RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked,id=dnf-alinux4-$TARG
     --mount=type=bind,from=alinas-rpm,source=efc.rpm,target=/tmp/efc.rpm \
     echo 'install_weak_deps=False' >> /etc/yum.conf; \
     set -ex; \
-    yum install -y util-linux procps openssl; \
+    yum install -y util-linux procps openssl strace; \
     yum install -y /tmp/alinas-utils.rpm; \
     yum install -y /tmp/efc.rpm; \
     sed -i 's/^poll_interval_sec = .*/poll_interval_sec = 0.5/' /etc/aliyun/alinas/alinas-utils.conf; \
@@ -227,7 +227,7 @@ RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked,id=dnf-alinux3-$TARG
     --mount=type=bind,from=alinas-rpm,source=efc.rpm,target=/tmp/efc.rpm \
     echo 'install_weak_deps=False' >> /etc/yum.conf; \
     set -ex; \
-    yum install -y /tmp/rpms/python3-provider-*.rpm fuse-devel util-linux mailcap procps tini openssl; \
+    yum install -y /tmp/rpms/python3-provider-*.rpm fuse-devel util-linux mailcap procps tini openssl strace; \
     yum install -y /tmp/ossfs.rpm; \
     yum install -y /tmp/ossfs2.rpm; \
     yum install -y /tmp/alinas-utils.rpm; \
